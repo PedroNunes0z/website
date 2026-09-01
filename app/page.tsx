@@ -1,5 +1,17 @@
 import { ArrowDownRight, ArrowRight, ArrowUpRight, Braces, CloudCog, DatabaseZap, Gauge, Layers3, ShieldCheck } from "lucide-react";
 import Link from "next/link";
+import { FaAws, FaJava, FaNodeJs } from "react-icons/fa";
+import {
+  SiJsonwebtokens,
+  SiNextdotjs,
+  SiPostgresql,
+  SiPwa,
+  SiReact,
+  SiRedis,
+  SiSpringboot,
+  SiTypescript,
+  SiVercel,
+} from "react-icons/si";
 import { ArticleCard } from "@/components/article-card";
 import { Footer } from "@/components/footer";
 import { Header } from "@/components/header";
@@ -7,7 +19,14 @@ import { SectionHeading } from "@/components/section-heading";
 import { SunScene } from "@/components/sun-scene";
 import { getArticles } from "@/lib/articles";
 
-const stack = ["Java", "Spring Boot", "TypeScript", "React", "Next.js", "PostgreSQL"];
+const stack = [
+  { label: "Java", icon: FaJava },
+  { label: "Spring Boot", icon: SiSpringboot },
+  { label: "TypeScript", icon: SiTypescript },
+  { label: "React", icon: SiReact },
+  { label: "Next.js", icon: SiNextdotjs },
+  { label: "PostgreSQL", icon: SiPostgresql },
+];
 
 const capabilities = [
   {
@@ -15,21 +34,36 @@ const capabilities = [
     number: "01",
     title: "Frontend",
     text: "Interfaces acessíveis, responsivas e orientadas à performance com React, Next.js e TypeScript.",
-    items: ["React", "Next.js", "TypeScript", "PWA"],
+    items: [
+      { label: "React", icon: SiReact },
+      { label: "Next.js", icon: SiNextdotjs },
+      { label: "TypeScript", icon: SiTypescript },
+      { label: "PWA", icon: SiPwa },
+    ],
   },
   {
     icon: Layers3,
     number: "02",
     title: "Backend",
     text: "APIs e regras de negócio sólidas, com autenticação, observabilidade e contratos bem definidos.",
-    items: ["Java", "Spring Boot", "Node.js", "REST"],
+    items: [
+      { label: "Java", icon: FaJava },
+      { label: "Spring Boot", icon: SiSpringboot },
+      { label: "Node.js", icon: FaNodeJs },
+      { label: "JWT", icon: SiJsonwebtokens },
+    ],
   },
   {
     icon: DatabaseZap,
     number: "03",
     title: "Dados & Cloud",
     text: "Persistência e infraestrutura pensadas para disponibilidade, custo e crescimento sustentável.",
-    items: ["PostgreSQL", "Redis", "AWS", "Vercel"],
+    items: [
+      { label: "PostgreSQL", icon: SiPostgresql },
+      { label: "Redis", icon: SiRedis },
+      { label: "AWS", icon: FaAws },
+      { label: "Vercel", icon: SiVercel },
+    ],
   },
 ];
 
@@ -73,7 +107,9 @@ export default async function Home() {
 
         <section className="stack-band" id="skills" aria-label="Principais tecnologias">
           <div className="marquee shell">
-            {stack.map((item) => <span key={item}>{item}</span>)}
+            {stack.map(({ label, icon: Logo }) => (
+              <span key={label}><Logo aria-hidden="true" /> {label}</span>
+            ))}
           </div>
         </section>
 
@@ -94,7 +130,9 @@ export default async function Home() {
                 <h3>{title}</h3>
                 <p>{text}</p>
                 <div className="tag-row">
-                  {items.map((item) => <span key={item}>{item}</span>)}
+                  {items.map(({ label, icon: Logo }) => (
+                    <span key={label}><Logo aria-hidden="true" /> {label}</span>
+                  ))}
                 </div>
               </article>
             ))}
