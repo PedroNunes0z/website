@@ -1,0 +1,29 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# local environment files
+.env
+.env.local
+.env.*.local
+
+# vercel
+.vercel
+
+# testing and tooling
+/coverage
+*.tsbuildinfo
+npm-debug.log*
+
+# operating system
+.DS_Store
+Thumbs.db
+
+# original 3D source retained locally; optimized model is versioned in public/
+/sun/
