@@ -16,6 +16,7 @@ import {
   Upload,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ChangeEvent, useRef, useState } from "react";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import type { Article, ArticleStatus } from "@/lib/types";
@@ -85,6 +86,7 @@ export function AdminDashboard({
   initialArticles: Article[];
   storageConfigured: boolean;
 }) {
+  const router = useRouter();
   const [articles, setArticles] = useState(initialArticles);
   const [editor, setEditor] = useState<EditorState>(
     initialArticles[0] ? articleToEditor(initialArticles[0]) : blankArticle(),
@@ -189,7 +191,8 @@ export function AdminDashboard({
 
   async function logout() {
     await fetch("/api/admin/logout", { method: "POST" });
-    window.location.assign("/admin/login");
+    router.replace("/admin/login");
+    router.refresh();
   }
 
   return (

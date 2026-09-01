@@ -1,9 +1,11 @@
 "use client";
 
 import { ArrowRight, LockKeyhole } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
 export function LoginForm({ destination = "/admin" }: { destination?: string }) {
+  const router = useRouter();
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -26,7 +28,8 @@ export function LoginForm({ destination = "/admin" }: { destination?: string }) 
       return;
     }
 
-    window.location.assign(destination.startsWith("/admin") ? destination : "/admin");
+    router.replace(destination.startsWith("/admin") ? destination : "/admin");
+    router.refresh();
   }
 
   return (
