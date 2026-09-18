@@ -14,7 +14,7 @@ O site foi construído com foco em identidade, performance e manutenção. A exp
 
 ### Principais recursos
 
-- Hero interativo com modelo 3D do Sol otimizado de 41,34 MB para 1,32 MB
+- Hero com o modelo 3D The Universe! (543 KB), enquadramento responsivo sem cortes e rotação suave
 - Identidade Black/Orange/White com `#FF8D4F` sobre preto
 - Fontes Tektur para títulos e JetBrains Mono para texto
 - Seções de competências, impacto, sobre, artigos e contato
@@ -52,7 +52,9 @@ app/
 components/                 interface pública, Markdown e painel
 lib/                        autenticação, validação, dados e conteúdo inicial
 public/
-  models/sun/               modelo glTF, buffer e textura
+  models/the_universe.glb   modelo 3D do hero, de Stark
+  models/the_universe.LICENSE.txt  atribuição e licença do modelo
+  models/sun/               asset anterior e sua licença, preservados
   og.png                    cartão social do site
 scripts/
   hash-password.mjs         geração do hash administrativo
@@ -170,7 +172,11 @@ Use valores diferentes para produção e ambientes de preview. Nunca versionar `
 
 ## Créditos do asset 3D
 
-Este projeto utiliza [Sun Model](https://sketchfab.com/3d-models/sun-model-b9e1dfd765984d9b8f998bd4a6be97b5), de [Black Hole](https://sketchfab.com/blckhole), licenciado sob [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). A licença original acompanha o modelo em `public/models/sun/license.txt`.
+O hero utiliza [The Universe!](https://skfb.ly/SZJ8), de [Stark](https://sketchfab.com/stark3d), licenciado sob [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/). A atribuição também aparece no rodapé e acompanha o arquivo em `public/models/the_universe.LICENSE.txt`.
+
+O GLB original e sua geometria foram preservados. Na exibição, o modelo é centralizado, redimensionado uniformemente e recebe iluminação e rotação próprias da interface. A transparência das camadas externas `Mat_Orb` e `Mat_Orb2` é suavizada em cópias dos materiais para revelar as órbitas internas. O enquadramento usa uma esfera que inclui toda a geometria e considera o campo de visão horizontal e vertical da câmera, com margem para a flutuação. O canvas não aplica máscara circular nem margens negativas. A rotação e a flutuação são desativadas quando o sistema solicita movimento reduzido.
+
+O asset anterior, [Sun Model](https://sketchfab.com/3d-models/sun-model-b9e1dfd765984d9b8f998bd4a6be97b5), de [Black Hole](https://sketchfab.com/blckhole), permanece arquivado em `public/models/sun/` com sua licença CC BY 4.0, mas não é carregado pelo hero.
 
 ## Licença
 

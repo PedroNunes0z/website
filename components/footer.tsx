@@ -19,7 +19,7 @@ export function Footer() {
       <div className="shell footer-bottom">
         <span>© {new Date().getFullYear()} Pedro Nunes</span>
         <span>
-          Modelo 3D: <a href="https://sketchfab.com/3d-models/sun-model-b9e1dfd765984d9b8f998bd4a6be97b5" target="_blank" rel="noreferrer">Sun Model</a> por Black Hole, CC BY 4.0
+          Modelo 3D: <a href="https://skfb.ly/SZJ8" target="_blank" rel="noreferrer">The Universe!</a> por <a href="https://sketchfab.com/stark3d" target="_blank" rel="noreferrer">Stark</a>, licenciado sob <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="license noreferrer">CC BY 4.0</a>
         </span>
       </div>
     </footer>

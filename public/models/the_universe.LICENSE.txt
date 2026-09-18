@@ -1,0 +1,14 @@
+"The Universe!" (https://skfb.ly/SZJ8) by Stark is licensed under Creative Commons Attribution 4.0 International (https://creativecommons.org/licenses/by/4.0/).
+
+Author: Stark (https://sketchfab.com/stark3d)
+Original source: https://sketchfab.com/3d-models/the-universe-ef1aa837c6fb480b8691c212a4d63d9d
+Asset: the_universe.glb
+
+The original GLB file is unmodified. Display adaptations in this website:
+centering, uniform scaling, responsive camera framing, lighting, rotation,
+floating animation, and reduced opacity of the Mat_Orb and Mat_Orb2 outer
+effect layers to reveal the inner orbital geometry. Display materials are
+cloned; the original file and geometry are preserved.
+
+The model is licensed separately from the website's MIT-licensed code.
+The linked Creative Commons license is the authoritative license text.

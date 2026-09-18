@@ -16,7 +16,7 @@ import { ArticleCard } from "@/components/article-card";
 import { Footer } from "@/components/footer";
 import { Header } from "@/components/header";
 import { SectionHeading } from "@/components/section-heading";
-import { SunScene } from "@/components/sun-scene";
+import { UniverseScene } from "@/components/universe-scene";
 import { getArticles } from "@/lib/articles";
 
 const stack = [
@@ -97,7 +97,7 @@ export default async function Home() {
               </a>
             </div>
           </div>
-          <SunScene />
+          <UniverseScene />
           <div className="hero-index" aria-hidden="true">
             <span>01</span>
             <span>/</span>
