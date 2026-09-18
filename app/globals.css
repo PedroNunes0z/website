@@ -35,8 +35,8 @@ body {
 }
 
 @keyframes hero-glow-drift {
-  from { transform: translate3d(-7%, -3%, 0) scale(0.92); opacity: 0.42; }
-  to { transform: translate3d(8%, 5%, 0) scale(1.08); opacity: 0.68; }
+  from { opacity: 0.42; }
+  to { opacity: 0.68; }
 }
 
 body::before {
@@ -121,9 +121,8 @@ img { max-width: 100%; }
 .hero h1 strong { display: block; background: linear-gradient(105deg, #ff8d4f 8%, #ffd5bd 42%, #ff6b2c 70%, #ff8d4f 92%); background-size: 220% auto; color: transparent; font-weight: 700; -webkit-background-clip: text; background-clip: text; animation: gradient-drift 8s ease-in-out infinite; }
 .hero-intro { max-width: 600px; margin: 2rem 0 0; color: #bbb5af; font-size: clamp(0.9rem, 1.2vw, 1.05rem); line-height: 1.8; }
 .hero-actions { margin-top: 2.25rem; display: flex; align-items: center; gap: 2rem; }
-.button { display: inline-flex; align-items: center; justify-content: center; gap: 0.75rem; min-height: 52px; padding: 0.75rem 1.15rem; border: 1px solid var(--orange); font-size: 0.78rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; transition: transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 320ms ease, background-color 320ms ease, color 320ms ease; }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 0.75rem; min-height: 52px; padding: 0.75rem 1.15rem; border: 1px solid var(--orange); font-size: 0.78rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; transition: border-color 320ms ease, background-color 320ms ease, color 320ms ease; }
 .button svg, .text-link svg { width: 17px; height: 17px; }
-.button:hover { transform: translateY(-1px); }
 .button-primary { background: var(--orange); color: var(--black); }
 .button-secondary { background: transparent; color: var(--orange); }
 .button-primary:hover { border-color: var(--white); background: var(--white); }
@@ -132,7 +131,10 @@ img { max-width: 100%; }
 .text-link:hover { border-color: var(--orange); color: var(--orange); }
 
 .universe-stage { position: relative; z-index: 1; width: 100%; max-width: 650px; min-width: 0; aspect-ratio: 1; justify-self: center; align-self: center; }
-.universe-stage canvas { position: relative; z-index: 2; display: block; }
+.universe-stage canvas { position: relative; z-index: 2; display: block; cursor: grab; touch-action: pan-y !important; }
+.universe-stage[data-dragging="true"] canvas { cursor: grabbing; }
+.universe-hint { position: absolute; z-index: 3; bottom: 10px; left: 0; width: 100%; margin: 0; pointer-events: none; color: #aaa49e; font-size: 0.6rem; line-height: 1.5; letter-spacing: 0.04em; text-align: center; }
+.universe-hint > span[aria-hidden] { margin-inline: 0.35rem; color: var(--orange); }
 .universe-glow { position: absolute; inset: 8%; pointer-events: none; border-radius: 50%; background: radial-gradient(circle, rgba(255, 141, 79, 0.12), rgba(255, 90, 20, 0.04) 42%, transparent 70%); filter: blur(24px); }
 .universe-fallback { position: absolute; inset: 20%; }
 .universe-fallback span { position: absolute; inset: 0; border: 1px solid rgba(255, 141, 79, 0.5); border-radius: 50%; transform: rotate(-25deg) scaleY(0.4); }
@@ -155,8 +157,8 @@ img { max-width: 100%; }
 .section-heading > div:last-child > p { max-width: 620px; margin: 1.5rem 0 0; color: var(--muted); font-size: 0.9rem; line-height: 1.8; }
 
 .capability-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
-.capability-card { min-height: 410px; padding: 2rem; display: flex; flex-direction: column; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: linear-gradient(135deg, rgba(16, 16, 15, 0.7) 25%, rgba(45, 25, 15, 0.7) 55%, rgba(16, 16, 15, 0.7) 80%); background-position: 100% 100%; background-size: 220% 220%; transition: transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1), border-color 360ms ease, background-position 500ms ease, box-shadow 360ms ease; }
-.capability-card:hover { border-color: rgba(255, 141, 79, 0.48); background-position: 0 0; box-shadow: 0 18px 44px rgba(0, 0, 0, 0.2); transform: translateY(-2px); }
+.capability-card { min-height: 410px; padding: 2rem; display: flex; flex-direction: column; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); background: linear-gradient(135deg, rgba(16, 16, 15, 0.7) 25%, rgba(45, 25, 15, 0.7) 55%, rgba(16, 16, 15, 0.7) 80%); background-position: 100% 100%; background-size: 220% 220%; transition: border-color 360ms ease, background-position 500ms ease, box-shadow 360ms ease; }
+.capability-card:hover { border-color: rgba(255, 141, 79, 0.48); background-position: 0 0; box-shadow: 0 18px 44px rgba(0, 0, 0, 0.2); }
 .capability-top { display: flex; align-items: center; justify-content: space-between; color: var(--orange); }
 .capability-top svg { width: 28px; height: 28px; stroke-width: 1.5; }
 .capability-top span { color: #625d58; font-size: 0.7rem; }
@@ -210,8 +212,8 @@ img { max-width: 100%; }
 .article-visual-fallback::before { position: absolute; width: 38%; aspect-ratio: 1; content: ""; border-radius: 50%; background: var(--orange); box-shadow: 0 0 50px rgba(255, 141, 79, 0.42); }
 .article-visual-fallback > span:first-child { position: absolute; left: 1.25rem; bottom: 1rem; z-index: 2; color: rgba(255, 255, 255, 0.55); font-size: 0.68rem; }
 .article-orbit { position: absolute; width: 72%; aspect-ratio: 1; border: 1px solid rgba(255, 141, 79, 0.36); border-radius: 50%; transform: scaleY(0.35) rotate(-15deg); }
-.article-arrow { position: absolute; top: 1rem; right: 1rem; z-index: 3; width: 20px; height: 20px; color: var(--orange); transition: color 320ms ease, transform 320ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-.article-card-link:hover .article-arrow { color: var(--white); transform: translate(2px, -2px); }
+.article-arrow { position: absolute; top: 1rem; right: 1rem; z-index: 3; width: 20px; height: 20px; color: var(--orange); transition: color 320ms ease; }
+.article-card-link:hover .article-arrow { color: var(--white); }
 .article-meta { margin-top: 1.25rem; display: flex; align-items: center; gap: 1.2rem; color: #7f7973; font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .article-meta span { display: inline-flex; align-items: center; gap: 0.35rem; }
 .article-meta svg { width: 12px; height: 12px; }

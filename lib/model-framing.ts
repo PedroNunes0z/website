@@ -2,7 +2,19 @@ import { Box3, MathUtils, Mesh, Vector3 } from "three";
 import type { Object3D } from "three";
 
 export const MODEL_RADIUS = 1;
-export const MODEL_FLOAT_RANGE = 0.04;
+export const MODEL_MAX_DISTANCE_FACTOR = 2.2;
+
+export function getScrollDistanceFactor(progress: number) {
+  return 1.25 - MathUtils.clamp(progress, 0, 1) * 0.25;
+}
+
+export function getZoomDistance(fittedDistance: number, progress: number, manualZoom = 1) {
+  return MathUtils.clamp(
+    fittedDistance * getScrollDistanceFactor(progress) * manualZoom,
+    fittedDistance,
+    fittedDistance * MODEL_MAX_DISTANCE_FACTOR,
+  );
+}
 
 export function getModelLayout(object: Object3D) {
   object.updateWorldMatrix(true, true);

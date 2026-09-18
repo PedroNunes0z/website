@@ -5,9 +5,9 @@ Original source: https://sketchfab.com/3d-models/the-universe-ef1aa837c6fb480b86
 Asset: the_universe.glb
 
 The original GLB file is unmodified. Display adaptations in this website:
-centering, uniform scaling, responsive camera framing, lighting, rotation,
-floating animation, and reduced opacity of the Mat_Orb and Mat_Orb2 outer
-effect layers to reveal the inner orbital geometry. Display materials are
+centering, uniform scaling, responsive camera framing, scroll-based and
+manual zoom, interactive rotation, lighting, and reduced opacity of the
+Mat_Orb and Mat_Orb2 outer effect layers to reveal the inner orbital geometry. Display materials are
 cloned; the original file and geometry are preserved.
 
 The model is licensed separately from the website's MIT-licensed code.

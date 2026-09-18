@@ -14,7 +14,7 @@ O site foi construído com foco em identidade, performance e manutenção. A exp
 
 ### Principais recursos
 
-- Hero com o modelo 3D The Universe! (543 KB), enquadramento responsivo sem cortes e rotação suave
+- Hero com o modelo 3D The Universe! (543 KB), zoom por scroll, rotação por arraste e enquadramento responsivo sem cortes
 - Identidade Black/Orange/White com `#FF8D4F` sobre preto
 - Fontes Tektur para títulos e JetBrains Mono para texto
 - Seções de competências, impacto, sobre, artigos e contato
@@ -174,7 +174,16 @@ Use valores diferentes para produção e ambientes de preview. Nunca versionar `
 
 O hero utiliza [The Universe!](https://skfb.ly/SZJ8), de [Stark](https://sketchfab.com/stark3d), licenciado sob [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/). A atribuição também aparece no rodapé e acompanha o arquivo em `public/models/the_universe.LICENSE.txt`.
 
-O GLB original e sua geometria foram preservados. Na exibição, o modelo é centralizado, redimensionado uniformemente e recebe iluminação e rotação próprias da interface. A transparência das camadas externas `Mat_Orb` e `Mat_Orb2` é suavizada em cópias dos materiais para revelar as órbitas internas. O enquadramento usa uma esfera que inclui toda a geometria e considera o campo de visão horizontal e vertical da câmera, com margem para a flutuação. O canvas não aplica máscara circular nem margens negativas. A rotação e a flutuação são desativadas quando o sistema solicita movimento reduzido.
+O GLB original e sua geometria foram preservados. Na exibição, o modelo é centralizado, redimensionado uniformemente e recebe iluminação e rotação próprias da interface. A transparência das camadas externas `Mat_Orb` e `Mat_Orb2` é suavizada em cópias dos materiais para revelar as órbitas internas. O enquadramento usa uma esfera que inclui toda a geometria e considera o campo de visão horizontal e vertical da câmera. O canvas não aplica máscara circular nem margens negativas; os limites de zoom preservam uma margem de segurança em todas as orientações.
+
+### Interação com o modelo
+
+- A rolagem da página aproxima progressivamente a câmera, sem deslocar o modelo no eixo vertical.
+- Sobre o canvas, a roda do mouse aproxima ou afasta o modelo. Fora dele, a página continua rolando normalmente.
+- Botão esquerdo + arraste gira a vista. Pan está desativado para manter a geometria centralizada.
+- Com o modelo focado, `+` e `-` ajustam o zoom; as setas giram a vista; `Home` restaura o enquadramento.
+- A primeira interação manual pausa a rotação automática. Com movimento reduzido, a rotação automática e a suavização são desativadas, mas os controles manuais continuam disponíveis.
+- Hovers preservam mudanças de cor e degradê, sem animações de deslocamento vertical.
 
 O asset anterior, [Sun Model](https://sketchfab.com/3d-models/sun-model-b9e1dfd765984d9b8f998bd4a6be97b5), de [Black Hole](https://sketchfab.com/blckhole), permanece arquivado em `public/models/sun/` com sua licença CC BY 4.0, mas não é carregado pelo hero.
 

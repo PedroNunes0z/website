@@ -1,11 +1,13 @@
 "use client";
 
 import { Environment, Lightformer, useGLTF } from "@react-three/drei";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Suspense, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { FrontSide, Mesh, MeshStandardMaterial, PerspectiveCamera } from "three";
+import { Canvas, useFrame } from "@react-three/fiber";
+import { Suspense, useId, useMemo, useRef, useSyncExternalStore } from "react";
+import type { RefObject } from "react";
+import { FrontSide, Mesh, MeshStandardMaterial } from "three";
 import type { Group } from "three";
-import { getCameraDistance, getModelLayout, MODEL_FLOAT_RANGE, MODEL_RADIUS } from "@/lib/model-framing";
+import { UniverseControls } from "@/components/universe-controls";
+import { getModelLayout } from "@/lib/model-framing";
 
 const MODEL_URL = "/models/the_universe.glb";
 
@@ -19,27 +21,7 @@ function getReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-function ModelCamera() {
-  const getRendererState = useThree((state) => state.get);
-  const { width, height } = useThree((state) => state.size);
-
-  useLayoutEffect(() => {
-    const { camera, invalidate } = getRendererState();
-    if (!(camera instanceof PerspectiveCamera) || height === 0) return;
-    camera.aspect = width / height;
-    const distance = getCameraDistance(MODEL_RADIUS + MODEL_FLOAT_RANGE, camera.getEffectiveFOV(), camera.aspect);
-    camera.position.set(0, 0, distance);
-    camera.near = 0.1;
-    camera.far = distance + 4;
-    camera.lookAt(0, 0, 0);
-    camera.updateProjectionMatrix();
-    invalidate();
-  }, [getRendererState, width, height]);
-
-  return null;
-}
-
-function UniverseModel({ reducedMotion }: { reducedMotion: boolean }) {
+function UniverseModel({ reducedMotion, interactionRef }: { reducedMotion: boolean; interactionRef: RefObject<boolean> }) {
   const group = useRef<Group>(null);
   const { scene } = useGLTF(MODEL_URL);
   const model = useMemo(() => {
@@ -63,10 +45,9 @@ function UniverseModel({ reducedMotion }: { reducedMotion: boolean }) {
     return { object, ...getModelLayout(object) };
   }, [scene]);
 
-  useFrame(({ clock }, delta) => {
-    if (!group.current || reducedMotion) return;
+  useFrame((_, delta) => {
+    if (!group.current || reducedMotion || interactionRef.current) return;
     group.current.rotation.y += Math.min(delta, 0.1) * 0.075;
-    group.current.position.y = Math.sin(clock.elapsedTime * 0.45) * MODEL_FLOAT_RANGE;
   });
 
   return (
@@ -90,9 +71,12 @@ function UniverseFallback() {
 
 export function UniverseScene() {
   const reducedMotion = useSyncExternalStore(subscribeToReducedMotion, getReducedMotion, () => true);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const interactionRef = useRef(false);
+  const hintId = useId();
 
   return (
-    <div className="universe-stage" role="img" aria-label="The Universe! — modelo tridimensional de Stark">
+    <div className="universe-stage" ref={stageRef} role="group" tabIndex={0} aria-label="The Universe! — modelo 3D interativo de Stark" aria-describedby={hintId}>
       <div className="universe-glow" aria-hidden="true" />
       <Canvas
         dpr={[1, 1.5]}
@@ -101,7 +85,7 @@ export function UniverseScene() {
         gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
         fallback={<UniverseFallback />}
       >
-        <ModelCamera />
+        <UniverseControls stageRef={stageRef} interactionRef={interactionRef} reducedMotion={reducedMotion} />
         <ambientLight intensity={0.65} />
         <directionalLight position={[3, 4, 5]} intensity={3} />
         <directionalLight position={[-3, -1, 2]} color="#ff8d4f" intensity={2} />
@@ -112,9 +96,13 @@ export function UniverseScene() {
             <Lightformer position={[-4, 0, 2]} target={[0, 0, 0]} scale={[3, 5, 1]} color="#ff8d4f" intensity={2} />
             <Lightformer position={[4, -2, 1]} target={[0, 0, 0]} scale={[3, 3, 1]} intensity={2} />
           </Environment>
-          <UniverseModel reducedMotion={reducedMotion} />
+          <UniverseModel reducedMotion={reducedMotion} interactionRef={interactionRef} />
         </Suspense>
       </Canvas>
+      <p className="universe-hint" id={hintId}>
+        Arraste para girar <span aria-hidden="true">·</span> Scroll para zoom
+        <span className="sr-only">. No teclado: mais e menos ajustam o zoom; setas giram o modelo; Home restaura a vista.</span>
+      </p>
     </div>
   );
 }
