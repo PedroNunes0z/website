@@ -113,7 +113,7 @@ Em `/games`, escolha Haxball ou hóquei. A física, os controles, as colisões e
 | Haxball | Você escolhe de 0 a 4 bots aliados e de 1 a 5 adversários. A partida termina em 5 gols. | Até 5 jogadores por equipe. |
 | Hóquei | Duelo 1v1 contra bot, até 7 gols. | Um jogador por equipe. |
 
-Use WASD ou as setas para mover. No Haxball, mantenha o botão esquerdo do mouse pressionado para carregar o chute e solte para chutar na direção apontada; `Shift` acelera e `Q` aplica curva. No hóquei, mova o taco para impulsionar o disco. O botão **Reiniciar** está disponível no modo bot e para o criador da sala online.
+Use WASD ou as setas para mover. No Haxball, mantenha o botão esquerdo do mouse pressionado para carregar o chute e solte para chutar na direção apontada; o indicador mostra a trajetória. `Shift` acelera enquanto houver estamina, e `F` curva o chute para o lado indicado pelo arco. O chute exige que a bola esteja à frente do jogador. Os jogadores colidem entre si e podem ultrapassar um pouco as linhas do campo; a bola permanece contida pelas paredes e traves. No hóquei, mova o taco para impulsionar o disco. O botão **Reiniciar** está disponível no modo bot e para o criador da sala online. Ambos os jogos têm botão de tela cheia e exibem o placar no centro após cada gol.
 
 Para jogar online, informe um nome, crie ou entre em uma sala pública e compartilhe o link ou o código exibido. A partida começa quando houver pelo menos um jogador em cada equipe. Não há contas nem autenticação nesta versão. Uma aba que recarrega tenta retomar a participação; jogadores inativos são removidos, e salas sem atividade expiram. O primeiro jogador ativo hospeda a simulação no navegador e publica o estado no Redis; os demais enviam comandos e recebem snapshots por polling. Portanto, a latência e o consumo de requisições variam conforme a rede e o plano do Redis/Vercel. O modo contra bot funciona sem Redis; o modo online exige as variáveis REST abaixo.
 
@@ -170,6 +170,7 @@ O atributo de título `"button"` transforma o link em uma ação visual. HTML ar
 | `npm start` | Executa a versão compilada |
 | `npm run lint` | Valida regras de código e acessibilidade |
 | `npm run typecheck` | Valida os tipos TypeScript |
+| `npm run test:games` | Testa física, estamina, colisões, chutes e gols dos jogos |
 | `npm run hash-password -- "senha"` | Gera um hash bcrypt com custo 12 |
 
 ## Deploy na Vercel
