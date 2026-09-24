@@ -27,6 +27,7 @@ O site foi construído com foco em identidade, performance e manutenção. A exp
 - Proteção centralizada de rotas administrativas
 - Limitação de tentativas de login e validação de origem nas mutações
 - Sitemap, robots, Open Graph e layout responsivo
+- Área `/games` com Haxball e hóquei jogáveis contra bots ou em salas públicas online
 
 ## Stack
 
@@ -40,6 +41,7 @@ O site foi construído com foco em identidade, performance e manutenção. A exp
 | Dados | Upstash Redis |
 | Imagens | Vercel Blob |
 | Hospedagem | Vercel |
+| Multiplayer | Salas e snapshots no Upstash Redis, sincronização por polling |
 
 ## Estrutura
 
@@ -48,9 +50,11 @@ app/
   admin/                    painel e autenticação
   api/admin/                rotas protegidas de login, artigos e upload
   artigos/                  listagem e páginas editoriais
+  games/                    catálogo e partidas de Haxball e hóquei
+  api/games/                salas públicas e sincronização das partidas
   globals.css               sistema visual completo
 components/                 interface pública, Markdown e painel
-lib/                        autenticação, validação, dados e conteúdo inicial
+lib/                        autenticação, dados, salas e física dos jogos
 public/
   models/the_universe.glb   modelo 3D do hero, de Stark
   models/the_universe.LICENSE.txt  atribuição e licença do modelo
@@ -100,6 +104,19 @@ npm run dev
 
 A aplicação estará disponível em `http://localhost:3000`. O painel editorial fica em `http://localhost:3000/admin`.
 
+## Jogos
+
+Em `/games`, escolha Haxball ou hóquei. A física, os controles, as colisões e as regras dos HTML fornecidos foram integrados ao Canvas da aplicação com a identidade visual preta, laranja e branca. Os HTML de exemplo não são necessários em produção.
+
+| Jogo | Contra bot | Salas públicas |
+| --- | --- | --- |
+| Haxball | Você escolhe de 0 a 4 bots aliados e de 1 a 5 adversários. A partida termina em 5 gols. | Até 5 jogadores por equipe. |
+| Hóquei | Duelo 1v1 contra bot, até 7 gols. | Um jogador por equipe. |
+
+Use WASD ou as setas para mover. No Haxball, mantenha o botão esquerdo do mouse pressionado para carregar o chute e solte para chutar na direção apontada; `Shift` acelera e `Q` aplica curva. No hóquei, mova o taco para impulsionar o disco. O botão **Reiniciar** está disponível no modo bot e para o criador da sala online.
+
+Para jogar online, informe um nome, crie ou entre em uma sala pública e compartilhe o link ou o código exibido. A partida começa quando houver pelo menos um jogador em cada equipe. Não há contas nem autenticação nesta versão. Uma aba que recarrega tenta retomar a participação; jogadores inativos são removidos, e salas sem atividade expiram. O primeiro jogador ativo hospeda a simulação no navegador e publica o estado no Redis; os demais enviam comandos e recebem snapshots por polling. Portanto, a latência e o consumo de requisições variam conforme a rede e o plano do Redis/Vercel. O modo contra bot funciona sem Redis; o modo online exige as variáveis REST abaixo.
+
 ## Variáveis de ambiente
 
 | Variável | Obrigatória | Finalidade |
@@ -107,11 +124,11 @@ A aplicação estará disponível em `http://localhost:3000`. O painel editorial
 | `NEXT_PUBLIC_SITE_URL` | Sim em produção | Origem pública usada em metadados, sitemap e validação; se ausente ou vazia, o build usa `http://localhost:3000` |
 | `AUTH_SECRET` | Sim | Assinatura das sessões administrativas |
 | `ADMIN_PASSWORD_HASH` | Sim | Hash bcrypt da senha do administrador |
-| `PN_KV_REST_API_URL` | Sim | Endpoint REST do Redis com prefixo personalizado |
-| `PN_KV_REST_API_TOKEN` | Sim | Token REST do Redis com prefixo personalizado |
+| `PN_KV_REST_API_URL` | Sim, se usar o prefixo `PN_` | Endpoint REST do Redis com prefixo personalizado |
+| `PN_KV_REST_API_TOKEN` | Sim, se usar o prefixo `PN_` | Token REST do Redis com prefixo personalizado |
 | `PN_KV_REST_API_READ_ONLY_TOKEN` | Opcional | Token somente leitura, usado para consultar artigos públicos |
-| `UPSTASH_REDIS_REST_URL` | Sim | Endpoint REST do Redis |
-| `UPSTASH_REDIS_REST_TOKEN` | Sim | Token REST do Redis |
+| `UPSTASH_REDIS_REST_URL` | Alternativa | Endpoint REST do Redis |
+| `UPSTASH_REDIS_REST_TOKEN` | Alternativa | Token REST do Redis |
 | `KV_REST_API_URL` | Alternativa | Nome compatível com integrações KV existentes |
 | `KV_REST_API_TOKEN` | Alternativa | Token da integração KV existente |
 | `BLOB_READ_WRITE_TOKEN` | Para uploads | Credencial de escrita do Vercel Blob |
