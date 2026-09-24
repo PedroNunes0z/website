@@ -20,6 +20,8 @@ function validInput(value: unknown): value is GameInput {
     && typeof input.y === "number" && Math.abs(input.y) <= 1
     && typeof input.sprint === "boolean"
     && typeof input.spin === "boolean"
+    && typeof input.kickSpin === "boolean"
+    && typeof input.charging === "boolean"
     && typeof input.kickSeq === "number" && Number.isSafeInteger(input.kickSeq) && input.kickSeq >= 0
     && typeof input.aimX === "number" && Number.isFinite(input.aimX) && Math.abs(input.aimX) <= 500
     && typeof input.aimY === "number" && Number.isFinite(input.aimY) && Math.abs(input.aimY) <= 280
@@ -63,8 +65,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const body = JSON.parse(raw);
     const game = gameFromString(body.game ?? "");
     if (!game || typeof body.playerId !== "string" || body.playerId.length > 64) return NextResponse.json({ error: "Jogador inválido." }, { status: 400 });
-    if (body.action === "input" && validInput(body.input)) {
-      await publishGameInput(game, id, body.playerId, body.input);
+    const normalizedInput = body.input && typeof body.input === "object"
+      ? { ...body.input, kickSpin: body.input.kickSpin === true, charging: body.input.charging === true }
+      : body.input;
+    if (body.action === "input" && validInput(normalizedInput)) {
+      await publishGameInput(game, id, body.playerId, normalizedInput);
       return NextResponse.json({ ok: true });
     }
     if (body.action === "snapshot" && validSnapshot(body.snapshot, game)) {
