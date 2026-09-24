@@ -1,5 +1,5 @@
 import { articleSchema, type ArticlePayload } from "@/lib/article-schema";
-import { getRedis } from "@/lib/redis";
+import { getReadRedis, getRedis } from "@/lib/redis";
 import { seedArticles } from "@/lib/seed-articles";
 import type { Article } from "@/lib/types";
 
@@ -17,7 +17,7 @@ function sortByDate(articles: Article[]) {
 }
 
 export async function getArticles(options: { includeDrafts?: boolean } = {}) {
-  const redis = getRedis();
+  const redis = getReadRedis();
   const stored = redis ? await redis.get<Article[]>(ARTICLES_KEY) : null;
   const articles = stored ?? seedArticles;
   const visible = options.includeDrafts

@@ -109,13 +109,14 @@ A aplicação estará disponível em `http://localhost:3000`. O painel editorial
 | `ADMIN_PASSWORD_HASH` | Sim | Hash bcrypt da senha do administrador |
 | `PN_KV_REST_API_URL` | Sim | Endpoint REST do Redis com prefixo personalizado |
 | `PN_KV_REST_API_TOKEN` | Sim | Token REST do Redis com prefixo personalizado |
+| `PN_KV_REST_API_READ_ONLY_TOKEN` | Opcional | Token somente leitura, usado para consultar artigos públicos |
 | `UPSTASH_REDIS_REST_URL` | Sim | Endpoint REST do Redis |
 | `UPSTASH_REDIS_REST_TOKEN` | Sim | Token REST do Redis |
 | `KV_REST_API_URL` | Alternativa | Nome compatível com integrações KV existentes |
 | `KV_REST_API_TOKEN` | Alternativa | Token da integração KV existente |
 | `BLOB_READ_WRITE_TOKEN` | Para uploads | Credencial de escrita do Vercel Blob |
 
-O aplicativo prioriza `PN_KV_REST_API_URL` e `PN_KV_REST_API_TOKEN`. Se estiverem vazias ou ausentes, usa os nomes Upstash e KV padrão, nessa ordem.
+O cliente `@upstash/redis` usa o endpoint REST HTTPS e os tokens REST. Para gravações administrativas, o aplicativo usa `PN_KV_REST_API_TOKEN`; o token `PN_KV_REST_API_READ_ONLY_TOKEN` fica restrito às leituras públicas. Se as variáveis `PN_` estiverem vazias ou ausentes, tenta os nomes Upstash e KV padrão. URLs TCP `rediss://` como `PN_KV_URL` e `PN_REDIS_URL` não são usadas por este cliente.
 
 Sem Redis, a interface pública usa artigos demonstrativos versionados no projeto. O painel permanece acessível quando a autenticação está configurada, mas as operações de gravação e exclusão retornam uma mensagem de configuração pendente.
 
