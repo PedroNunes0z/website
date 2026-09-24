@@ -107,11 +107,15 @@ A aplicação estará disponível em `http://localhost:3000`. O painel editorial
 | `NEXT_PUBLIC_SITE_URL` | Sim em produção | Origem pública usada em metadados, sitemap e validação; se ausente ou vazia, o build usa `http://localhost:3000` |
 | `AUTH_SECRET` | Sim | Assinatura das sessões administrativas |
 | `ADMIN_PASSWORD_HASH` | Sim | Hash bcrypt da senha do administrador |
+| `PN_KV_REST_API_URL` | Sim | Endpoint REST do Redis com prefixo personalizado |
+| `PN_KV_REST_API_TOKEN` | Sim | Token REST do Redis com prefixo personalizado |
 | `UPSTASH_REDIS_REST_URL` | Sim | Endpoint REST do Redis |
 | `UPSTASH_REDIS_REST_TOKEN` | Sim | Token REST do Redis |
 | `KV_REST_API_URL` | Alternativa | Nome compatível com integrações KV existentes |
 | `KV_REST_API_TOKEN` | Alternativa | Token da integração KV existente |
 | `BLOB_READ_WRITE_TOKEN` | Para uploads | Credencial de escrita do Vercel Blob |
+
+O aplicativo prioriza `PN_KV_REST_API_URL` e `PN_KV_REST_API_TOKEN`. Se estiverem vazias ou ausentes, usa os nomes Upstash e KV padrão, nessa ordem.
 
 Sem Redis, a interface pública usa artigos demonstrativos versionados no projeto. O painel permanece acessível quando a autenticação está configurada, mas as operações de gravação e exclusão retornam uma mensagem de configuração pendente.
 
