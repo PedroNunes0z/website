@@ -104,7 +104,7 @@ A aplicação estará disponível em `http://localhost:3000`. O painel editorial
 
 | Variável | Obrigatória | Finalidade |
 | --- | --- | --- |
-| `NEXT_PUBLIC_SITE_URL` | Sim | Origem pública usada em metadados, sitemap e validação |
+| `NEXT_PUBLIC_SITE_URL` | Sim em produção | Origem pública usada em metadados, sitemap e validação; se ausente ou vazia, o build usa `http://localhost:3000` |
 | `AUTH_SECRET` | Sim | Assinatura das sessões administrativas |
 | `ADMIN_PASSWORD_HASH` | Sim | Hash bcrypt da senha do administrador |
 | `UPSTASH_REDIS_REST_URL` | Sim | Endpoint REST do Redis |

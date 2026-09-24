@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { SITE_URL } from "@/lib/site-url";
 import { JetBrains_Mono, Tektur } from "next/font/google";
 import "highlight.js/styles/github-dark.css";
 import "./globals.css";
@@ -15,7 +16,7 @@ const jetBrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
-const siteUrl = new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000");
+const siteUrl = new URL(SITE_URL);
 
 export const metadata: Metadata = {
   metadataBase: siteUrl,
