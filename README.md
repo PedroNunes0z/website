@@ -28,6 +28,7 @@ O site foi construído com foco em identidade, performance e manutenção. A exp
 - Limitação de tentativas de login e validação de origem nas mutações
 - Sitemap, robots, Open Graph e layout responsivo
 - Área `/games` com Haxball e hóquei jogáveis contra bots ou em salas públicas online
+- Comentários por artigo com conta de leitor, respostas, Markdown restrito, imagens moderadas e nota de 1 a 5
 
 ## Stack
 
@@ -52,6 +53,7 @@ app/
   artigos/                  listagem e páginas editoriais
   games/                    catálogo e partidas de Haxball e hóquei
   api/games/                salas públicas e sincronização das partidas
+  api/comments/             contas de leitores, comentários e moderação
   globals.css               sistema visual completo
 components/                 interface pública, Markdown e painel
 lib/                        autenticação, dados, salas e física dos jogos
@@ -113,7 +115,7 @@ Em `/games`, escolha Haxball ou hóquei. A física, os controles, as colisões e
 | Haxball | Você escolhe de 0 a 4 bots aliados e de 1 a 5 adversários. A partida termina em 5 gols. | Até 5 jogadores por equipe. |
 | Hóquei | Duelo 1v1 contra bot, até 7 gols. | Um jogador por equipe. |
 
-Use WASD ou as setas para mover. No Haxball, mantenha o botão esquerdo do mouse pressionado para carregar o chute e solte para chutar na direção apontada; o indicador mostra a trajetória. `Shift` acelera enquanto houver estamina, e `F` curva o chute para o lado indicado pelo arco. O chute exige que a bola esteja à frente do jogador. Os jogadores colidem entre si e podem ultrapassar um pouco as linhas do campo; a bola permanece contida pelas paredes e traves. No hóquei, mova o taco para impulsionar o disco. O botão **Reiniciar** está disponível no modo bot e para o criador da sala online. Ambos os jogos têm botão de tela cheia e exibem o placar no centro após cada gol.
+Use WASD ou as setas para mover. No Haxball, mantenha o botão esquerdo do mouse pressionado para carregar o chute e solte para chutar na direção apontada; o indicador mostra a trajetória. `Shift` acelera enquanto houver estamina, e `F` curva o chute para o lado indicado pelo arco. A barra de estamina aparece apenas para o jogador local. O chute exige a bola à frente do jogador e fica limitado a 45° para cada lado do eixo jogador–bola. Os jogadores colidem entre si e podem ultrapassar um pouco as linhas do campo; a bola permanece contida pelas paredes e traves cilíndricas. No hóquei, mova o taco para impulsionar o disco. O bot antecipa o rebote do disco e recua para defender quando necessário. O botão **Reiniciar** está disponível no modo bot e para o criador da sala online. Ambos os jogos têm botão de tela cheia e exibem o placar no centro após cada gol.
 
 Para jogar online, informe um nome, crie ou entre em uma sala pública e compartilhe o link ou o código exibido. A partida começa quando houver pelo menos um jogador em cada equipe. Não há contas nem autenticação nesta versão. Uma aba que recarrega tenta retomar a participação; jogadores inativos são removidos, e salas sem atividade expiram. O primeiro jogador ativo hospeda a simulação no navegador e publica o estado no Redis; os demais enviam comandos e recebem snapshots por polling. Portanto, a latência e o consumo de requisições variam conforme a rede e o plano do Redis/Vercel. O modo contra bot funciona sem Redis; o modo online exige as variáveis REST abaixo.
 
@@ -132,10 +134,20 @@ Para jogar online, informe um nome, crie ou entre em uma sala pública e compart
 | `KV_REST_API_URL` | Alternativa | Nome compatível com integrações KV existentes |
 | `KV_REST_API_TOKEN` | Alternativa | Token da integração KV existente |
 | `BLOB_READ_WRITE_TOKEN` | Para uploads | Credencial de escrita do Vercel Blob |
+| `SIGHT_ENGINE_API_USER` | Para comentários | Usuário da API Sightengine, somente no servidor |
+| `SIGHT_ENGINE_API_KEY` | Para comentários | Chave da API Sightengine, somente no servidor |
 
 O cliente `@upstash/redis` usa o endpoint REST HTTPS e os tokens REST. Para gravações administrativas, o aplicativo usa `PN_KV_REST_API_TOKEN`; o token `PN_KV_REST_API_READ_ONLY_TOKEN` fica restrito às leituras públicas. Se as variáveis `PN_` estiverem vazias ou ausentes, tenta os nomes Upstash e KV padrão. URLs TCP `rediss://` como `PN_KV_URL` e `PN_REDIS_URL` não são usadas por este cliente.
 
 Sem Redis, a interface pública usa artigos demonstrativos versionados no projeto. O painel permanece acessível quando a autenticação está configurada, mas as operações de gravação e exclusão retornam uma mensagem de configuração pendente.
+
+## Comentários e avaliações
+
+Ao final de cada artigo publicado, o leitor pode criar uma conta com nome público, e-mail e senha ou entrar em uma conta existente. O e-mail não é exibido. A senha é armazenada apenas como hash bcrypt e a sessão de leitor usa um cookie `httpOnly` separado da sessão administrativa. Esta autenticação simples não inclui verificação de e-mail nem recuperação de senha; use uma senha exclusiva.
+
+O editor oferece formatação Markdown básica, links, respostas e uma imagem opcional JPG/PNG/WebP de até 2 MB. HTML e imagens incorporadas pelo Markdown não são renderizados. Texto, nome público e imagens são enviados à Sightengine no servidor; se a análise falhar ou indicar conteúdo indevido, nada é publicado. Imagens aprovadas vão para Vercel Blob. A chave da API não é exposta no navegador. A nota é opcional, varia de 1 a 5 e há uma única nota por conta em cada artigo: uma avaliação posterior da mesma conta substitui a anterior. O limite é de três comentários por minuto por conta, com limite adicional por IP. O autor pode excluir o próprio comentário, e o administrador pode remover qualquer comentário pela página pública enquanto estiver autenticado no painel.
+
+Comentários exigem Redis, `AUTH_SECRET` e as duas variáveis `SIGHT_ENGINE_*`. Imagens nos comentários também exigem `BLOB_READ_WRITE_TOKEN`. Sem Blob, comentários apenas em texto ainda funcionam. Para verificar a moderação sem usar a API real, rode `npm run test:comments`.
 
 ## Conteúdo Markdown
 

@@ -10,6 +10,7 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test:games": "node --test tests/game-engine.test.mjs",
+    "test:comments": "node --test tests/comment-moderation.test.mjs",
     "hash-password": "node scripts/hash-password.mjs"
   },
   "engines": {

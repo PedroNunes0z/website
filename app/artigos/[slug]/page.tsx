@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import { Footer } from "@/components/footer";
 import { Header } from "@/components/header";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
+import { ArticleComments } from "@/components/article-comments";
 import { getArticleBySlug } from "@/lib/articles";
 
 interface ArticlePageProps {
@@ -85,6 +86,7 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
           </aside>
           <MarkdownRenderer content={article.content} />
         </article>
+        <ArticleComments slug={slug} />
       </main>
       <Footer />
     </>
