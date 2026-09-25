@@ -19,7 +19,8 @@ O site foi construído com foco em identidade, performance e manutenção. A exp
 - Fontes Tektur para títulos e JetBrains Mono para texto
 - Seções de competências, impacto, sobre, artigos e contato
 - Listagem e páginas individuais de artigos com metadados sociais próprios
-- Editor Markdown com títulos, citações, links, referências, imagens e botões
+- Editor Markdown com títulos, citações, links, referências, imagens, botões e vídeos do YouTube
+- Cópia do Markdown completo e de cada bloco de código na página do artigo
 - Destaque de sintaxe com `rehype-highlight`
 - Upload de imagens para Vercel Blob
 - Persistência editorial em Upstash Redis
@@ -115,9 +116,9 @@ Em `/games`, escolha Haxball ou hóquei. A física, os controles, as colisões e
 | Haxball | Você escolhe de 0 a 4 bots aliados e de 1 a 5 adversários. A partida termina em 5 gols. | Até 5 jogadores por equipe. |
 | Hóquei | Duelo 1v1 contra bot, até 7 gols. | Um jogador por equipe. |
 
-Use WASD ou as setas para mover. No Haxball, mantenha o botão esquerdo do mouse pressionado para carregar o chute e solte para chutar na direção apontada; o indicador mostra a trajetória. `Shift` acelera enquanto houver estamina, e `F` curva o chute para o lado indicado pelo arco. A barra de estamina aparece apenas para o jogador local. O chute exige a bola à frente do jogador e fica limitado a 45° para cada lado do eixo jogador–bola. Os jogadores colidem entre si e podem ultrapassar um pouco as linhas do campo; a bola permanece contida pelas paredes e traves cilíndricas. No hóquei, mova o taco para impulsionar o disco. O bot antecipa o rebote do disco e recua para defender quando necessário. O botão **Reiniciar** está disponível no modo bot e para o criador da sala online. Ambos os jogos têm botão de tela cheia e exibem o placar no centro após cada gol.
+Use WASD ou as setas para mover. No Haxball, mantenha o botão esquerdo do mouse pressionado para carregar o chute e solte para chutar na direção apontada; o indicador mostra a trajetória. `Shift` acelera, `F` curva o chute e `Q` dá um dash curto na direção do cursor, consumindo estamina e respeitando um intervalo entre usos. A barra de estamina aparece apenas para o jogador local. O chute exige a bola à frente do jogador e fica limitado a 45° para cada lado do eixo jogador–bola. A força dos chutes dos bots varia; o gol só conta quando a bola passa inteiramente pela linha. Os jogadores colidem entre si e podem ultrapassar um pouco as linhas do campo; a bola permanece contida pelas paredes e traves. No hóquei, mova o taco para impulsionar o disco. Os tacos aceleram menos e freiam rapidamente; o bot antecipa o rebote do disco e recua para defender quando necessário. O botão **Reiniciar** está disponível no modo bot e para o criador da sala online. Ambos os jogos têm botão de tela cheia e exibem o placar no centro após cada gol.
 
-Para jogar online, informe um nome, crie ou entre em uma sala pública e compartilhe o link ou o código exibido. A partida começa quando houver pelo menos um jogador em cada equipe. Não há contas nem autenticação nesta versão. Uma aba que recarrega tenta retomar a participação; jogadores inativos são removidos, e salas sem atividade expiram. O primeiro jogador ativo hospeda a simulação no navegador e publica o estado no Redis; os demais enviam comandos e recebem snapshots por polling. Portanto, a latência e o consumo de requisições variam conforme a rede e o plano do Redis/Vercel. O modo contra bot funciona sem Redis; o modo online exige as variáveis REST abaixo.
+Para jogar online, informe um nome, crie ou entre em uma sala pública e compartilhe o link ou o código exibido. Com ao menos um jogador em cada equipe, somente o criador da sala pode clicar em **Iniciar partida**; a sala não começa automaticamente. Não há contas nesta versão. A autorização do dono usa uma credencial exclusiva da sala, guardada na sessão do navegador. Uma aba que recarrega tenta retomar a participação; jogadores inativos são removidos, e salas sem atividade expiram. O criador hospeda a simulação no navegador e publica o estado no Redis; os demais enviam comandos e recebem snapshots por polling. Se o criador sair, a sala é encerrada. Portanto, a latência e o consumo de requisições variam conforme a rede e o plano do Redis/Vercel. O modo contra bot funciona sem Redis; o modo online exige as variáveis REST abaixo.
 
 ## Variáveis de ambiente
 
@@ -166,12 +167,14 @@ export const ready = true;
 
 [Abrir recurso](https://exemplo.com "button")
 
+[Vídeo do YouTube](https://www.youtube.com/watch?v=M7lc1UVf-VE "youtube")
+
 ### Referências
 
 - [Documentação oficial](https://exemplo.com/docs)
 ````
 
-O atributo de título `"button"` transforma o link em uma ação visual. HTML arbitrário não é interpretado, reduzindo a superfície de injeção de conteúdo.
+O atributo de título `"button"` transforma o link em uma ação visual. O atributo `"youtube"` incorpora vídeos de URLs válidas do YouTube com o player `youtube-nocookie.com`; o painel oferece um campo para inserir esse marcador sem digitar a sintaxe manualmente. HTML arbitrário não é interpretado, reduzindo a superfície de injeção de conteúdo.
 
 ## Scripts
 
@@ -183,6 +186,8 @@ O atributo de título `"button"` transforma o link em uma ação visual. HTML ar
 | `npm run lint` | Valida regras de código e acessibilidade |
 | `npm run typecheck` | Valida os tipos TypeScript |
 | `npm run test:games` | Testa física, estamina, colisões, chutes e gols dos jogos |
+| `npm run test:articles` | Testa a validação dos links de vídeo |
+| `npm run test:comments` | Testa regras de moderação de comentários |
 | `npm run hash-password -- "senha"` | Gera um hash bcrypt com custo 12 |
 
 ## Deploy na Vercel

@@ -7,6 +7,7 @@ import { Footer } from "@/components/footer";
 import { Header } from "@/components/header";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import { ArticleComments } from "@/components/article-comments";
+import { CopyContent } from "@/components/copy-content";
 import { getArticleBySlug } from "@/lib/articles";
 
 interface ArticlePageProps {
@@ -67,6 +68,7 @@ export default async function ArticlePage({ params }: ArticlePageProps) {
           <div className="article-byline">
             <span><CalendarDays aria-hidden="true" /> {dateFormatter.format(new Date(article.publishedAt))}</span>
             <span><Clock3 aria-hidden="true" /> {article.readingTime} min de leitura</span>
+            <CopyContent text={article.content} label="Copiar Markdown" className="article-copy-markdown" />
           </div>
         </header>
 

@@ -5,6 +5,8 @@ import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSlug from "rehype-slug";
 import remarkGfm from "remark-gfm";
+import { CopyCodeBlock } from "@/components/copy-content";
+import { getYouTubeEmbedUrl } from "@/lib/youtube";
 
 export function MarkdownRenderer({ content }: { content: string }) {
   return (
@@ -19,6 +21,8 @@ export function MarkdownRenderer({ content }: { content: string }) {
         components={{
           a({ href = "", title, children }) {
             const external = href.startsWith("http");
+            const youtubeUrl = title === "youtube" ? getYouTubeEmbedUrl(href) : null;
+            if (youtubeUrl) return <span className="article-video"><iframe src={youtubeUrl} title="Vídeo do YouTube" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerPolicy="strict-origin-when-cross-origin" allowFullScreen /></span>;
             if (title === "button") {
               return (
                 <a className="button button-primary markdown-button" href={href} target={external ? "_blank" : undefined} rel={external ? "noreferrer" : undefined}>
@@ -36,6 +40,7 @@ export function MarkdownRenderer({ content }: { content: string }) {
             if (typeof src !== "string" || !URL.canParse(src)) return null;
             return <Image src={src} alt={alt} width={1400} height={788} sizes="(max-width: 900px) 100vw, 820px" />;
           },
+          pre({ children }) { return <CopyCodeBlock>{children}</CopyCodeBlock>; },
         }}
       >
         {content}

@@ -14,12 +14,14 @@ import {
   Save,
   Trash2,
   Upload,
+  Video,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, useRef, useState } from "react";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import type { Article, ArticleStatus } from "@/lib/types";
+import { getYouTubeEmbedUrl } from "@/lib/youtube";
 
 interface EditorState {
   id?: string;
@@ -94,6 +96,8 @@ export function AdminDashboard({
   const [preview, setPreview] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [showVideoInput, setShowVideoInput] = useState(false);
+  const [videoUrl, setVideoUrl] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -195,6 +199,18 @@ export function AdminDashboard({
     router.refresh();
   }
 
+  function insertVideo() {
+    const url = videoUrl.trim();
+    if (!getYouTubeEmbedUrl(url)) {
+      setMessage("Informe uma URL válida de vídeo do YouTube.");
+      return;
+    }
+    insertSnippet(`\n[Vídeo do YouTube](${url} "youtube")\n`, "");
+    setVideoUrl("");
+    setShowVideoInput(false);
+    setMessage("Vídeo inserido no artigo.");
+  }
+
   return (
     <main className="admin-shell">
       <header className="admin-header">
@@ -290,10 +306,12 @@ export function AdminDashboard({
                 {snippets.map(({ label, icon: Icon, before, after }) => (
                   <button type="button" key={label} title={label} aria-label={label} onClick={() => insertSnippet(before, after)}><Icon aria-hidden="true" /></button>
                 ))}
+                <button type="button" title="Vídeo do YouTube" aria-label="Vídeo do YouTube" aria-expanded={showVideoInput} onClick={() => setShowVideoInput((value) => !value)}><Video aria-hidden="true" /></button>
                 <button type="button" title="Enviar imagem" aria-label="Enviar imagem" onClick={() => fileInputRef.current?.click()}><Upload aria-hidden="true" /></button>
                 <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" onChange={uploadImage} hidden />
               </div>
             </div>
+            {showVideoInput && <div className="editor-video-input"><label htmlFor="youtube-url">URL do vídeo do YouTube</label><input id="youtube-url" type="url" value={videoUrl} onChange={(event) => setVideoUrl(event.target.value)} placeholder="https://www.youtube.com/watch?v=..." onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); insertVideo(); } }} /><button type="button" onClick={insertVideo}>Inserir vídeo</button></div>}
             {preview ? (
               <div className="editor-preview"><MarkdownRenderer content={editor.content} /></div>
             ) : (

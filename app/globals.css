@@ -281,6 +281,14 @@ img { max-width: 100%; }
 .article-byline { margin-top: 2.5rem; display: flex; align-items: center; gap: 1.5rem; color: #817b75; font-size: 0.66rem; text-transform: uppercase; }
 .article-byline span { display: inline-flex; align-items: center; gap: 0.45rem; }
 .article-byline svg { width: 14px; height: 14px; color: var(--orange); }
+.article-copy-markdown, .article-code-copy { display: inline-flex; align-items: center; justify-content: center; gap: .45rem; border: 1px solid var(--line); background: #11100f; color: var(--orange); font-size: .64rem; text-transform: uppercase; letter-spacing: .06em; cursor: pointer; transition: color 220ms ease, border-color 220ms ease, background-color 220ms ease; }
+.article-copy-markdown { min-height: 36px; margin-left: auto; padding: .5rem .75rem; }
+.article-copy-markdown:hover, .article-code-copy:hover { border-color: var(--orange); background: #24170f; color: var(--white); }
+.article-code-block { position: relative; margin: 2rem 0; }
+.article-code-block pre { margin: 0; padding-top: 3.6rem; }
+.article-code-copy { position: absolute; top: .75rem; right: .75rem; z-index: 1; min-height: 30px; padding: .3rem .55rem; }
+.article-video { width: 100%; margin: 2rem 0; display: block; aspect-ratio: 16 / 9; overflow: hidden; border: 1px solid var(--line); background: #090909; }
+.article-video iframe { width: 100%; height: 100%; display: block; border: 0; }
 .article-cover { overflow: hidden; aspect-ratio: 1.9; border: 1px solid var(--line); background: #111; }
 .article-cover img { width: 100%; height: 100%; object-fit: cover; }
 .article-cover-fallback { position: relative; height: min(50vw, 620px); overflow: hidden; border: 1px solid var(--line); background: radial-gradient(circle at 50% 50%, #4d1d08 0, #17100c 30%, #090908 70%); }
@@ -420,6 +428,9 @@ img { max-width: 100%; }
 .game-room-card > div:first-child { display: flex; flex-direction: column; font-size: .75rem; }
 .game-room-card small, .game-room-teams { color: var(--muted); font-size: .65rem; }
 .game-room-code { color: var(--orange); font-size: .64rem; }
+.game-start-row { padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-top: 1px solid var(--line); }
+.game-start-row span { color: var(--muted); font-size: .68rem; }
+@media (max-width: 650px) { .game-start-row { align-items: stretch; flex-direction: column; }.game-start-row button { width: 100%; } }
 .game-room-teams { display: flex; gap: 1rem; }
 .game-rooms-empty { padding: 1.6rem 2rem; }
 .game-active-heading { padding: 1.75rem 2rem; display: flex; align-items: start; justify-content: space-between; gap: 2rem; border-bottom: 1px solid var(--line); }
@@ -557,6 +568,13 @@ img { max-width: 100%; }
 .markdown-toolbar button { width: 32px; height: 32px; display: grid; place-items: center; border: 0; background: transparent; color: #77716b; cursor: pointer; }
 .markdown-toolbar button:hover { background: #211d1a; color: var(--orange); }
 .markdown-toolbar svg { width: 15px; height: 15px; }
+.editor-video-input { padding: .8rem 1.25rem; display: flex; align-items: center; gap: .7rem; border-bottom: 1px solid var(--line); background: #15120f; }
+.editor-video-input label { color: var(--muted); font-size: .65rem; white-space: nowrap; }
+.editor-video-input input { min-width: 0; flex: 1; padding: .55rem .7rem; border: 1px solid #4b413a; background: #0b0b0a; color: var(--white); font-size: .7rem; outline: none; }
+.editor-video-input input:focus { border-color: var(--orange); }
+.editor-video-input button { min-height: 34px; padding: .45rem .7rem; border: 1px solid var(--orange); background: var(--orange); color: var(--black); font-size: .64rem; font-weight: 800; cursor: pointer; transition: background-color 220ms ease; }
+.editor-video-input button:hover { background: var(--white); }
+@media (max-width: 650px) { .editor-video-input { flex-wrap: wrap; }.editor-video-input label { width: 100%; }.article-copy-markdown { margin-left: 0; } }
 .markdown-textarea { width: 100%; min-height: 620px; padding: 1.5rem; display: block; border: 0; outline: 0; resize: vertical; background: transparent; color: #d2ccc6; font-size: 0.76rem; line-height: 1.8; tab-size: 2; }
 .editor-preview { min-height: 620px; padding: clamp(1.5rem, 4vw, 4rem); }
 
