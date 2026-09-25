@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = await readFile(new URL("../lib/game-engine.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { createOnlineGame, stepGame } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { createOnlineGame, createBotGame, resolveKickDirection, stepGame } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 const roster = [
   { id: "white", name: "Branco", team: "blue", joinedAt: 0, lastSeen: 0 },
@@ -82,6 +82,34 @@ test("não chuta de costas; com F, o chute faz curva na direção da mira", () =
   assert.ok((state.ball.spin ?? 0) > 0);
   assert.ok(state.ball.vx > 0);
   assert.ok(state.ball.vy > 0);
+});
+
+test("o chute respeita o cone de 45 graus em todas as orientações", () => {
+  const player = { x: 0, y: 0 };
+  for (const angle of [-Math.PI, -Math.PI / 2, 0, Math.PI / 2, Math.PI]) {
+    const ball = { x: Math.cos(angle) * 35, y: Math.sin(angle) * 35 };
+    const aim = angle + Math.PI * 0.4;
+    const direction = resolveKickDirection(player, ball, Math.cos(aim) * 200, Math.sin(aim) * 200);
+    assert.ok(direction);
+    const dot = (direction.x * ball.x + direction.y * ball.y) / 35;
+    assert.ok(dot >= Math.cos(Math.PI / 4) - 0.0001);
+    assert.equal(resolveKickDirection(player, ball, -ball.x, -ball.y), null);
+  }
+});
+
+test("o bot do hóquei recua para defender a trajetória do disco", () => {
+  const state = createBotGame("hoquei", { blue: 0, orange: 1 });
+  const bot = state.players.find((player) => player.bot);
+  state.ball.x = -60;
+  state.ball.y = 125;
+  state.ball.vx = 500;
+  state.ball.vy = 0;
+  const beforeX = bot.x;
+  const beforeY = bot.y;
+  stepGame(state, {}, {}, 1 / 60);
+  assert.ok(bot.x > beforeX);
+  assert.ok(bot.y > beforeY);
+  assert.ok(bot.x <= 476);
 });
 
 test("o disco do hóquei tem limite de velocidade reduzido", () => {

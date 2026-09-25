@@ -293,11 +293,23 @@ function steer(player: GameActor, input: GameInput, dt: number, game: GameId) {
 function botInput(player: GameActor, state: GameSnapshot): GameInput {
   const ball = state.ball;
   if (state.game === "hoquei") {
-    const targetX = player.team === "blue"
-      ? clamp(ball.x - 55, -HALF_WIDTH + 30, -30)
-      : clamp(ball.x + 55, 30, HALF_WIDTH - 30);
-    const targetY = clamp(ball.y + ball.vy * 0.16, -HALF_HEIGHT + 30, HALF_HEIGHT - 30);
-    return { ...emptyInput, x: clamp((targetX - player.x) / 70, -1, 1), y: clamp((targetY - player.y) / 70, -1, 1) };
+    const side = player.team === "blue" ? -1 : 1;
+    const ownGoalX = side * HALF_WIDTH;
+    const approaching = ball.vx * side > 40;
+    const inOwnHalf = ball.x * side > 0;
+    const defenseX = side * (HALF_WIDTH - 82);
+    const travel = approaching ? clamp((defenseX - ball.x) / (ball.vx || 1), 0, 0.75) : 0.16;
+    const predictedY = reflectedPuckY(ball.y + ball.vy * travel);
+    const danger = inOwnHalf || (approaching && Math.abs(ball.x - ownGoalX) < 600);
+    const targetX = approaching && Math.abs(ball.vx) > 200 && Math.abs(ball.x - defenseX) > 95
+      ? defenseX
+      : danger ? clamp(ball.x + side * 38, -HALF_WIDTH + 27, HALF_WIDTH - 27) : defenseX;
+    const ownHalfX = side < 0 ? clamp(targetX, -HALF_WIDTH + 27, -28) : clamp(targetX, 28, HALF_WIDTH - 27);
+    const targetY = danger ? predictedY : clamp(predictedY * 0.55, -140, 140);
+    // A frenagem considera a velocidade atual para evitar oscilações perto do disco.
+    const dx = ownHalfX - player.x - player.vx * 0.085;
+    const dy = targetY - player.y - player.vy * 0.085;
+    return { ...emptyInput, x: Math.abs(dx) < 5 ? 0 : clamp(dx / 62, -1, 1), y: Math.abs(dy) < 5 ? 0 : clamp(dy / 62, -1, 1) };
   }
   const targetX = ball.x + (player.team === "blue" ? -32 : 32);
   const sameTeam = state.players.filter((other) => other.team === player.team);
@@ -312,6 +324,29 @@ function botInput(player: GameActor, state: GameSnapshot): GameInput {
     aimY: clamp(ball.y * 0.25, -80, 80),
     power: 0.75,
   };
+}
+
+function reflectedPuckY(y: number) {
+  const edge = HALF_HEIGHT - 11;
+  const period = 4 * edge;
+  const phase = ((y + edge) % period + period) % period;
+  return phase <= 2 * edge ? phase - edge : 3 * edge - phase;
+}
+
+export function resolveKickDirection(player: Pick<GameActor, "x" | "y">, ball: Pick<GameObject, "x" | "y">, aimX: number, aimY: number) {
+  const toBallX = ball.x - player.x;
+  const toBallY = ball.y - player.y;
+  const ballDistance = Math.hypot(toBallX, toBallY);
+  const dx = aimX - player.x;
+  const dy = aimY - player.y;
+  const aimDistance = Math.hypot(dx, dy);
+  if (ballDistance < 1 || aimDistance < 1) return null;
+  const ballAngle = Math.atan2(toBallY, toBallX);
+  const aimAngle = Math.atan2(dy, dx);
+  const difference = Math.atan2(Math.sin(aimAngle - ballAngle), Math.cos(aimAngle - ballAngle));
+  if (Math.abs(difference) >= Math.PI / 2) return null;
+  const angle = ballAngle + clamp(difference, -Math.PI / 4, Math.PI / 4);
+  return { x: Math.cos(angle), y: Math.sin(angle) };
 }
 
 function collideCircles(a: GameObject, b: GameObject, radiusA: number, radiusB: number, massA: number, massB: number, restitution: number, ballBoost = false) {
@@ -345,14 +380,11 @@ function kick(state: GameSnapshot, player: GameActor, input: GameInput) {
   if (player.cooldown > 0 || state.freeze > 0) return;
   const ball = state.ball;
   if (Math.hypot(ball.x - player.x, ball.y - player.y) > 16 + 11 + 14) return;
-  const dx = input.aimX - player.x;
-  const dy = input.aimY - player.y;
-  const length = Math.hypot(dx, dy) || 1;
-  const forward = ((ball.x - player.x) * dx + (ball.y - player.y) * dy) / (length * (Math.hypot(ball.x - player.x, ball.y - player.y) || 1));
-  if (forward < 0.3) return;
+  const direction = resolveKickDirection(player, ball, input.aimX, input.aimY);
+  if (!direction) return;
   const speed = 850 * (0.35 + 0.65 * clamp(input.power, 0, 1));
-  ball.vx = (dx / length) * speed + player.vx * 0.35;
-  ball.vy = (dy / length) * speed + player.vy * 0.35;
+  ball.vx = direction.x * speed + player.vx * 0.35;
+  ball.vy = direction.y * speed + player.vy * 0.35;
   ball.spin = input.kickSpin ? 8 : (ball.spin ?? 0) * 0.3;
   player.cooldown = 0.45;
 }
@@ -452,41 +484,70 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
   ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI * 2); ctx.fill();
 
   const goalHalf = state.game === "haxball" ? 85 : 62;
+  const goalDepth = GOAL_DEPTH[state.game];
   ctx.fillStyle = "rgba(255,253,249,.12)";
-  ctx.fillRect(-HALF_WIDTH - 42, -goalHalf, 42, goalHalf * 2);
+  ctx.fillRect(-HALF_WIDTH - goalDepth, -goalHalf, goalDepth, goalHalf * 2);
   ctx.fillStyle = "rgba(255,141,79,.16)";
-  ctx.fillRect(HALF_WIDTH, -goalHalf, 42, goalHalf * 2);
-  ctx.strokeStyle = "#fffdf9"; ctx.strokeRect(-HALF_WIDTH - 42, -goalHalf, 42, goalHalf * 2);
-  ctx.strokeStyle = "#ff8d4f"; ctx.strokeRect(HALF_WIDTH, -goalHalf, 42, goalHalf * 2);
+  ctx.fillRect(HALF_WIDTH, -goalHalf, goalDepth, goalHalf * 2);
+  ctx.strokeStyle = "#fffdf9"; ctx.strokeRect(-HALF_WIDTH - goalDepth, -goalHalf, goalDepth, goalHalf * 2);
+  ctx.strokeRect(HALF_WIDTH, -goalHalf, goalDepth, goalHalf * 2);
+
+  if (state.game === "haxball") {
+    ctx.lineWidth = 4;
+    for (const x of [-HALF_WIDTH, HALF_WIDTH]) {
+      ctx.beginPath(); ctx.moveTo(x, -goalHalf); ctx.lineTo(x, goalHalf); ctx.stroke();
+      for (const y of [-goalHalf, goalHalf]) {
+        const metal = ctx.createRadialGradient(x - 2, y - 2, 1, x, y, 7);
+        metal.addColorStop(0, "#ffffff");
+        metal.addColorStop(0.5, "#d7d5d1");
+        metal.addColorStop(1, "#77736e");
+        ctx.fillStyle = metal;
+        ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = "#f7f4ef"; ctx.lineWidth = 1; ctx.stroke();
+      }
+    }
+  }
 
   if (state.game === "haxball") {
     for (const player of state.players) {
       if (!player.bot && player.charge > 0) {
         const direction = Math.hypot(player.aimX - player.x, player.aimY - player.y) || 1;
-        const ux = (player.aimX - player.x) / direction;
-        const uy = (player.aimY - player.y) / direction;
-        const sideX = -uy;
-        const sideY = ux;
-        const startX = player.x + ux * 28;
-        const startY = player.y + uy * 28;
-        const reach = 110 + player.charge * 105;
-        const bend = player.curve ? 26 + player.charge * 34 : 0;
-        const controlX = startX + ux * reach * 0.55 + sideX * bend * 0.12;
-        const controlY = startY + uy * reach * 0.55 + sideY * bend * 0.12;
-        const endX = startX + ux * reach + sideX * bend;
-        const endY = startY + uy * reach + sideY * bend;
-        const tangent = Math.atan2(endY - controlY, endX - controlX);
+        const closeToBall = Math.hypot(state.ball.x - player.x, state.ball.y - player.y) <= 41;
+        const legal = closeToBall ? resolveKickDirection(player, state.ball, player.aimX, player.aimY) : null;
+        if (closeToBall && !legal) continue;
+        const ux = legal?.x ?? (player.aimX - player.x) / direction;
+        const uy = legal?.y ?? (player.aimY - player.y) / direction;
+        let px = closeToBall ? state.ball.x : player.x + ux * 28;
+        let py = closeToBall ? state.ball.y : player.y + uy * 28;
+        let vx = ux * 850 * (0.35 + 0.65 * player.charge);
+        let vy = uy * 850 * (0.35 + 0.65 * player.charge);
+        let spin = player.curve ? 8 : 0;
         ctx.save();
         ctx.strokeStyle = player.team === "blue" ? "#ff8d4f" : "#fffdf9";
         ctx.lineWidth = 2.5;
         ctx.setLineDash([8, 6]);
-        ctx.beginPath(); ctx.moveTo(startX, startY); ctx.quadraticCurveTo(controlX, controlY, endX, endY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(px, py);
+        for (let point = 0; point < 24; point++) {
+          const speed = Math.hypot(vx, vy);
+          if (spin && speed > 20) {
+            vx += (-vy / speed) * spin * 42 / 60;
+            vy += (vx / speed) * spin * 42 / 60;
+            spin *= 1 - 1.1 / 60;
+          }
+          vx *= 1 - 0.7 / 60;
+          vy *= 1 - 0.7 / 60;
+          px += vx / 60;
+          py += vy / 60;
+          ctx.lineTo(px, py);
+        }
+        ctx.stroke();
         ctx.setLineDash([]);
+        const tangent = Math.atan2(vy, vx);
         ctx.beginPath();
-        ctx.moveTo(endX, endY);
-        ctx.lineTo(endX - Math.cos(tangent - 0.5) * 12, endY - Math.sin(tangent - 0.5) * 12);
-        ctx.moveTo(endX, endY);
-        ctx.lineTo(endX - Math.cos(tangent + 0.5) * 12, endY - Math.sin(tangent + 0.5) * 12);
+        ctx.moveTo(px, py);
+        ctx.lineTo(px - Math.cos(tangent - 0.5) * 12, py - Math.sin(tangent - 0.5) * 12);
+        ctx.moveTo(px, py);
+        ctx.lineTo(px - Math.cos(tangent + 0.5) * 12, py - Math.sin(tangent + 0.5) * 12);
         ctx.stroke();
         ctx.restore();
       }
@@ -504,7 +565,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
     ctx.fillStyle = player.team === "blue" ? "#050505" : "#120c08";
     ctx.font = "bold 10px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(player.bot ? "B" : "P", player.x, player.y + 1);
-    if (state.game === "haxball") {
+    if (state.game === "haxball" && player.id === localPlayerId) {
       const barWidth = 42;
       ctx.fillStyle = "rgba(0,0,0,.8)";
       ctx.fillRect(player.x - barWidth / 2 - 2, player.y - radius - 31, barWidth + 4, 7);
@@ -530,5 +591,5 @@ export function pointerToField(canvas: HTMLCanvasElement, clientX: number, clien
   const scale = Math.min(canvas.width / 1160, canvas.height / VIEW_HEIGHT);
   const x = (clientX - bounds.left) * (canvas.width / bounds.width);
   const y = (clientY - bounds.top) * (canvas.height / bounds.height);
-  return { x: clamp((x - canvas.width / 2) / scale, -HALF_WIDTH, HALF_WIDTH), y: clamp((y - canvas.height / 2) / scale, -HALF_HEIGHT, HALF_HEIGHT) };
+  return { x: clamp((x - canvas.width / 2) / scale, -1000, 1000), y: clamp((y - canvas.height / 2) / scale, -1000, 1000) };
 }

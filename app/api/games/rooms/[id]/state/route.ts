@@ -23,8 +23,8 @@ function validInput(value: unknown): value is GameInput {
     && typeof input.kickSpin === "boolean"
     && typeof input.charging === "boolean"
     && typeof input.kickSeq === "number" && Number.isSafeInteger(input.kickSeq) && input.kickSeq >= 0
-    && typeof input.aimX === "number" && Number.isFinite(input.aimX) && Math.abs(input.aimX) <= 500
-    && typeof input.aimY === "number" && Number.isFinite(input.aimY) && Math.abs(input.aimY) <= 280
+    && typeof input.aimX === "number" && Number.isFinite(input.aimX) && Math.abs(input.aimX) <= 1000
+    && typeof input.aimY === "number" && Number.isFinite(input.aimY) && Math.abs(input.aimY) <= 1000
     && typeof input.power === "number" && input.power >= 0 && input.power <= 1;
 }
 
