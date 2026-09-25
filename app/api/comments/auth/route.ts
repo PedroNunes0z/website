@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { clearCommentSession, findCommentUser, getCommentSession, registerCommentUser, setCommentSession, verifyCommentPassword } from "@/lib/comment-auth";
-import { moderateCommentText } from "@/lib/comment-moderation";
+import { CommentModerationError, moderateCommentText } from "@/lib/comment-moderation";
 import { enforceCommentRate } from "@/lib/comments";
 import { getRedis } from "@/lib/redis";
 import { getClientAddress, isSameOrigin } from "@/lib/request-security";
@@ -20,7 +20,15 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   if (!isSameOrigin(request)) return NextResponse.json({ error: "Origem inválida." }, { status: 403 });
-  if (!getRedis() || !process.env.AUTH_SECRET) return NextResponse.json({ error: "Comentários indisponíveis no momento." }, { status: 503 });
+  const redis = getRedis();
+  const authSecretConfigured = Boolean(process.env.AUTH_SECRET);
+  if (!redis || !authSecretConfigured) {
+    console.error("[comments/auth] Required service configuration is missing", {
+      redisConfigured: Boolean(redis),
+      authSecretConfigured,
+    });
+    return NextResponse.json({ error: "Comentários indisponíveis no momento. Verifique a configuração do serviço." }, { status: 503 });
+  }
   if (Number(request.headers.get("content-length") ?? 0) > 4096) return NextResponse.json({ error: "Dados muito extensos." }, { status: 413 });
   const parsed = credentials.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Confira nome, e-mail e senha (mínimo de 10 caracteres)." }, { status: 400 });
@@ -44,7 +52,13 @@ export async function POST(request: NextRequest) {
     await setCommentSession(user);
     return NextResponse.json({ user: { id: user.id, name: user.name } });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Não foi possível entrar." }, { status: 503 });
+    if (error instanceof CommentModerationError) {
+      return NextResponse.json({ error: error.message }, { status: error.kind === "unavailable" ? 503 : 400 });
+    }
+    console.error("[comments/auth] Registration or login failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+    return NextResponse.json({ error: "Não foi possível concluir a autenticação. Tente novamente." }, { status: 500 });
   }
 }
 

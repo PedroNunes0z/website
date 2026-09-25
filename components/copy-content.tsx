@@ -25,7 +25,15 @@ export function CopyContent({ text, label, className = "" }: { text: string; lab
   </button>;
 }
 
-export function CopyCodeBlock({ children }: { children: ReactNode }) {
+const languageNames: Record<string, string> = {
+  bash: "Bash", c: "C", cpp: "C++", cs: "C#", css: "CSS", go: "Go", html: "HTML",
+  java: "Java", js: "JavaScript", json: "JSON", jsx: "React JSX", md: "Markdown",
+  markdown: "Markdown", py: "Python", python: "Python", sh: "Shell", sql: "SQL",
+  ts: "TypeScript", tsx: "React TSX", typescript: "TypeScript", xml: "XML", yaml: "YAML", yml: "YAML",
+};
+
+export function CopyCodeBlock({ children, language }: { children: ReactNode; language?: string }) {
   const text = Children.toArray(children).map(plainText).join("").replace(/\n$/, "");
-  return <div className="article-code-block"><CopyContent text={text} label="Copiar código" className="article-code-copy" /><pre>{children}</pre></div>;
+  const label = languageNames[language?.toLowerCase() ?? ""] ?? (language ? `${language.slice(0, 1).toUpperCase()}${language.slice(1)}` : "Código");
+  return <div className="article-code-block"><span className="article-code-language">{label}</span><CopyContent text={text} label="Copiar código" className="article-code-copy" /><pre>{children}</pre></div>;
 }

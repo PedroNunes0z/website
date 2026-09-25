@@ -256,7 +256,8 @@ img { max-width: 100%; }
 .article-prose pre { margin: 2rem 0; padding: 1.4rem; overflow-x: auto; border: 1px solid var(--line); background: #0b0b0a !important; font-size: 0.78rem; line-height: 1.75; tab-size: 2; }
 .article-prose :not(pre) > code { padding: 0.15rem 0.35rem; background: #24211f; color: var(--orange); }
 .article-prose img { width: 100%; height: auto; margin: 2rem 0; border: 1px solid var(--line); }
-.article-prose hr { margin: 4rem 0; border: 0; border-top: 1px solid var(--line); }
+.article-prose hr { position: relative; height: 1px; margin: 4rem 0; border: 0; overflow: visible; background: linear-gradient(90deg, transparent, rgba(255, 141, 79, .18) 12%, rgba(255, 141, 79, .65) 50%, rgba(255, 141, 79, .18) 88%, transparent); }
+.article-prose hr::before { position: absolute; top: 50%; left: 50%; width: 9px; height: 9px; border: 1px solid var(--orange); background: #0a0a09; content: ""; transform: translate(-50%, -50%) rotate(45deg); box-shadow: 0 0 14px rgba(255, 141, 79, .35); }
 .article-prose table { width: 100%; margin: 2rem 0; border-collapse: collapse; font-size: 0.78rem; }
 .article-prose th, .article-prose td { padding: 0.8rem; border: 1px solid var(--line); text-align: left; }
 .article-prose th { color: var(--white); background: #151412; }
@@ -286,6 +287,7 @@ img { max-width: 100%; }
 .article-copy-markdown:hover, .article-code-copy:hover { border-color: var(--orange); background: #24170f; color: var(--white); }
 .article-code-block { position: relative; margin: 2rem 0; }
 .article-code-block pre { margin: 0; padding-top: 3.6rem; }
+.article-code-language { position: absolute; top: .88rem; left: .95rem; z-index: 1; color: #aaa19a; font-size: .61rem; letter-spacing: .08em; text-transform: uppercase; }
 .article-code-copy { position: absolute; top: .75rem; right: .75rem; z-index: 1; min-height: 30px; padding: .3rem .55rem; }
 .article-video { width: 100%; margin: 2rem 0; display: block; aspect-ratio: 16 / 9; overflow: hidden; border: 1px solid var(--line); background: #090909; }
 .article-video iframe { width: 100%; height: 100%; display: block; border: 0; }

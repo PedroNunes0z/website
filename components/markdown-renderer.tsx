@@ -1,5 +1,6 @@
 import { ExternalLink } from "lucide-react";
 import Image from "next/image";
+import { Children, isValidElement } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeAutolinkHeadings from "rehype-autolink-headings";
 import rehypeHighlight from "rehype-highlight";
@@ -40,7 +41,14 @@ export function MarkdownRenderer({ content }: { content: string }) {
             if (typeof src !== "string" || !URL.canParse(src)) return null;
             return <Image src={src} alt={alt} width={1400} height={788} sizes="(max-width: 900px) 100vw, 820px" />;
           },
-          pre({ children }) { return <CopyCodeBlock>{children}</CopyCodeBlock>; },
+          pre({ children }) {
+            const code = Children.toArray(children).find((child) => isValidElement<{ className?: string }>(child));
+            const languageClass = code && isValidElement<{ className?: string }>(code)
+              ? code.props.className?.split(/\s+/).find((name) => name.startsWith("language-"))
+              : undefined;
+            const language = languageClass?.slice("language-".length);
+            return <CopyCodeBlock language={language}>{children}</CopyCodeBlock>;
+          },
         }}
       >
         {content}

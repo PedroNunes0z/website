@@ -1,7 +1,7 @@
 import { put, del } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 import { getCommentSession } from "@/lib/comment-auth";
-import { moderateCommentImage, moderateCommentText } from "@/lib/comment-moderation";
+import { CommentModerationError, moderateCommentImage, moderateCommentText } from "@/lib/comment-moderation";
 import { deleteComment, enforceCommentRate, getComment, listComments, saveComment, saveRating, type StoredComment } from "@/lib/comments";
 import { getArticleBySlug } from "@/lib/articles";
 import { getRedis } from "@/lib/redis";
@@ -79,7 +79,13 @@ export async function POST(request: NextRequest, context: Context) {
     }
     return NextResponse.json({ ok: true }, { status: 201 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Falha ao enviar comentário." }, { status: 400 });
+    if (error instanceof CommentModerationError) {
+      return NextResponse.json({ error: error.message }, { status: error.kind === "unavailable" ? 503 : 400 });
+    }
+    console.error("[comments/post] Comment submission failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+    return NextResponse.json({ error: "Não foi possível enviar o comentário. Tente novamente." }, { status: 500 });
   }
 }
 

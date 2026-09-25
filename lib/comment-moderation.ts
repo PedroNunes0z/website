@@ -8,10 +8,27 @@ type Result = {
   [key: string]: unknown;
 };
 
+export class CommentModerationError extends Error {
+  constructor(readonly kind: "unavailable" | "rejected", message: string) {
+    super(message);
+    this.name = "CommentModerationError";
+  }
+}
+
+function unavailable() {
+  return new CommentModerationError("unavailable", "Moderação indisponível no momento. Tente novamente.");
+}
+
 function credentials() {
   const user = process.env.SIGHT_ENGINE_API_USER;
   const key = process.env.SIGHT_ENGINE_API_KEY;
-  if (!user || !key) throw new Error("Moderação indisponível no momento.");
+  if (!user || !key) {
+    console.error("[comments/moderation] Sightengine credentials are missing", {
+      apiUserConfigured: Boolean(user),
+      apiKeyConfigured: Boolean(key),
+    });
+    throw unavailable();
+  }
   return { user, key };
 }
 
@@ -19,12 +36,23 @@ async function check(url: string, form: FormData, timeout: number): Promise<Resu
   let response: Response;
   try {
     response = await fetch(url, { method: "POST", body: form, signal: AbortSignal.timeout(timeout), cache: "no-store" });
-  } catch {
-    throw new Error("Moderação indisponível no momento. Tente novamente.");
+  } catch (error) {
+    console.error("[comments/moderation] Sightengine request failed before receiving a response", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+    throw unavailable();
   }
-  if (!response.ok) throw new Error("Moderação indisponível no momento. Tente novamente.");
-  const result = await response.json().catch(() => null) as Result | null;
-  if (!result || result.status !== "success") throw new Error("Moderação indisponível no momento. Tente novamente.");
+  const result = await response.json().catch(() => null) as (Result & { error?: { code?: string | number; type?: string } }) | null;
+  if (!response.ok || !result || result.status !== "success") {
+    console.error("[comments/moderation] Sightengine rejected moderation request", {
+      endpoint: url === TEXT_URL ? "text" : "image",
+      mode: form.get("mode"),
+      httpStatus: response.status,
+      providerCode: result?.error?.code ?? null,
+      providerType: result?.error?.type ?? null,
+    });
+    throw unavailable();
+  }
   return result;
 }
 
@@ -46,27 +74,34 @@ export function isUnsafeText(result: Result) {
 }
 
 export async function moderateCommentText(text: string) {
-  const form = formWithCredentials();
-  form.append("text", text);
-  form.append("lang", "pt");
-  form.append("models", "general");
-  form.append("categories", RULES.join(","));
-  form.append("mode", "rules,ml");
-  if (isUnsafeText(await check(TEXT_URL, form, 10_000))) {
-    throw new Error("O texto não atende às regras de segurança da comunidade.");
+  const ruleForm = formWithCredentials();
+  ruleForm.append("text", text);
+  ruleForm.append("lang", "pt");
+  ruleForm.append("categories", RULES.join(","));
+  ruleForm.append("mode", "rules");
+
+  const mlForm = formWithCredentials();
+  mlForm.append("text", text);
+  mlForm.append("lang", "pt");
+  mlForm.append("models", "general");
+  mlForm.append("mode", "ml");
+
+  const results = await Promise.all([check(TEXT_URL, ruleForm, 10_000), check(TEXT_URL, mlForm, 10_000)]);
+  if (results.some(isUnsafeText)) {
+    throw new CommentModerationError("rejected", "O texto não atende às regras de segurança da comunidade.");
   }
 }
 
 export async function validateCommentImage(file: File) {
   const allowed = new Set(["image/jpeg", "image/png", "image/webp"]);
   if (!allowed.has(file.type) || file.size > 2 * 1024 * 1024 || file.size === 0) {
-    throw new Error("Use uma imagem JPG, PNG ou WebP de até 2 MB.");
+    throw new CommentModerationError("rejected", "Use uma imagem JPG, PNG ou WebP de até 2 MB.");
   }
   const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
   const jpeg = file.type === "image/jpeg" && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
   const png = file.type === "image/png" && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
   const webp = file.type === "image/webp" && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP";
-  if (!jpeg && !png && !webp) throw new Error("O arquivo não corresponde ao formato informado.");
+  if (!jpeg && !png && !webp) throw new CommentModerationError("rejected", "O arquivo não corresponde ao formato informado.");
 }
 
 const unsafeImageScores: Array<[RegExp, number]> = [
@@ -93,6 +128,6 @@ export async function moderateCommentImage(file: File) {
   form.append("media", file, file.name || "comentario");
   form.append("models", "nudity-2.1,recreational_drug,medical,offensive-2.0,face-age,gore-2.0,qr-content,violence,self-harm,gambling");
   if (isUnsafeImage(await check(IMAGE_URL, form, 12_000))) {
-    throw new Error("A imagem não atende às regras de segurança da comunidade.");
+    throw new CommentModerationError("rejected", "A imagem não atende às regras de segurança da comunidade.");
   }
 }

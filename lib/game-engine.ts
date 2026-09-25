@@ -295,17 +295,18 @@ function steer(player: GameActor, input: GameInput, dt: number, game: GameId) {
     }
   }
   const dashing = game === "haxball" && (player.dashRemaining ?? 0) > 0;
-  const max = game === "haxball" ? (dashing ? 430 : player.bot ? 160 : sprinting ? 250 : 190) : 260;
+  const max = game === "haxball" ? (dashing ? 350 : player.bot ? 150 : sprinting ? 205 : 150) : 260;
   if (dashing) {
     player.vx = player.dashX * max;
     player.vy = player.dashY * max;
     player.dashRemaining = Math.max(0, player.dashRemaining - dt);
   } else {
-    const acceleration = game === "haxball" ? 2000 : 2200;
+    const reversing = input.x * player.vx + input.y * player.vy < -1;
+    const acceleration = game === "haxball" ? (reversing ? 1850 : 1350) : 2200;
     player.vx += (input.x / length) * acceleration * dt;
     player.vy += (input.y / length) * acceleration * dt;
     if (!input.x && !input.y) {
-      const drag = Math.max(0, 1 - (game === "haxball" ? 9 : 28) * dt);
+      const drag = Math.max(0, 1 - (game === "haxball" ? 12 : 28) * dt);
       player.vx *= drag;
       player.vy *= drag;
     }
