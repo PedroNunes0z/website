@@ -15,6 +15,7 @@ export interface GameRoomPlayer {
 export interface GameRoom {
   id: string;
   game: GameId;
+  ownerId: string;
   createdAt: number;
   status: "waiting" | "playing";
   players: GameRoomPlayer[];
@@ -34,6 +35,10 @@ function snapshotKey(id: string) {
 
 function inputsKey(id: string) {
   return `${ROOM_PREFIX}${id}:inputs`;
+}
+
+function ownerTokenKey(id: string) {
+  return `${ROOM_PREFIX}${id}:owner`;
 }
 
 function roomIndex(game: GameId) {
@@ -83,11 +88,11 @@ export async function publishGameInput(game: GameId, id: string, playerId: strin
   await redis.expire(inputsKey(id), ROOM_TTL_SECONDS);
 }
 
-export async function publishGameSnapshot(game: GameId, id: string, playerId: string, snapshot: GameSnapshot) {
+export async function publishGameSnapshot(game: GameId, id: string, playerId: string, ownerToken: string, snapshot: GameSnapshot) {
   const redis = getRedis();
   if (!redis) throw new Error("STORAGE_NOT_CONFIGURED");
   const room = await getGameRoom(game, id);
-  if (room.players[0]?.id !== playerId || snapshot.game !== game) throw new Error("NOT_HOST");
+  if (room.ownerId !== playerId || room.status !== "playing" || snapshot.game !== game || await redis.get<string>(ownerTokenKey(id)) !== ownerToken) throw new Error("NOT_HOST");
   await redis.set(snapshotKey(id), snapshot, { ex: ROOM_TTL_SECONDS });
 }
 
@@ -98,18 +103,21 @@ export async function createGameRoom(game: GameId, name: string) {
   const now = Date.now();
   const id = crypto.randomUUID().replaceAll("-", "").slice(0, 8).toUpperCase();
   const playerId = crypto.randomUUID();
+  const ownerToken = crypto.randomUUID();
   const room: GameRoom = {
     id,
     game,
+    ownerId: playerId,
     createdAt: now,
     status: "waiting",
     players: [{ id: playerId, name, team: "blue", joinedAt: now, lastSeen: now }],
   };
 
   await redis.set(roomKey(id), room, { ex: ROOM_TTL_SECONDS });
+  await redis.set(ownerTokenKey(id), ownerToken, { ex: ROOM_TTL_SECONDS });
   await redis.zadd(roomIndex(game), { score: now, member: id });
   await redis.zremrangebyscore(roomIndex(game), 0, now - ROOM_TTL_SECONDS * 1000);
-  return { room, playerId, player: room.players[0] };
+  return { room, playerId, ownerToken, player: room.players[0] };
 }
 
 function maxPlayersPerTeam(game: GameId) {
@@ -135,14 +143,27 @@ for _, player in ipairs(room.players) do
   end
 end
 room.players = fresh
-if existing then
-  existing.lastSeen = now
-  redis.call('SET', KEYS[1], cjson.encode(room), 'EX', 60)
-  return 'JOINED'
+local ownerPresent = false
+for _, player in ipairs(fresh) do
+  if player.id == room.ownerId then ownerPresent = true; break end
+end
+if not ownerPresent or redis.call('EXISTS', KEYS[5]) == 0 then
+  redis.call('DEL', KEYS[1], KEYS[3], KEYS[4], KEYS[5])
+  redis.call('ZREM', KEYS[2], room.id)
+  return 'NOT_FOUND'
 end
 local blue, orange = 0, 0
 for _, player in ipairs(room.players) do
   if player.team == 'blue' then blue = blue + 1 else orange = orange + 1 end
+end
+if blue == 0 or orange == 0 then
+  room.status = 'waiting'
+  redis.call('DEL', KEYS[3], KEYS[4])
+end
+if existing then
+  existing.lastSeen = now
+  redis.call('SET', KEYS[1], cjson.encode(room), 'EX', 60)
+  return 'JOINED'
 end
 local team = requestedTeam
 if team == 'blue' and blue >= maxPerTeam then team = 'orange' end
@@ -156,7 +177,6 @@ if team ~= 'blue' and team ~= 'orange' then
 end
 local player = { id = playerId, name = name, team = team, joinedAt = now, lastSeen = now }
 table.insert(room.players, player)
-room.status = #room.players >= 2 and 'playing' or 'waiting'
 redis.call('SET', KEYS[1], cjson.encode(room), 'EX', 60)
 redis.call('ZADD', KEYS[2], now, room.id)
 return 'JOINED'
@@ -168,7 +188,7 @@ export async function joinGameRoom(game: GameId, id: string, playerId: string, n
 
   const result = await redis.eval<string[], string>(
     JOIN_ROOM_SCRIPT,
-    [roomKey(id), roomIndex(game)],
+    [roomKey(id), roomIndex(game), snapshotKey(id), inputsKey(id), ownerTokenKey(id)],
     [String(Date.now()), playerId, name, team, String(maxPlayersPerTeam(game)), game],
   );
   if (result === "FULL") throw new Error("FULL");
@@ -196,16 +216,31 @@ for _, player in ipairs(room.players) do
 end
 if not found then return 'NOT_FOUND' end
 room.players = fresh
-room.status = #room.players >= 2 and 'playing' or 'waiting'
+local ownerPresent = false
+local blue, orange = 0, 0
+for _, player in ipairs(fresh) do
+  if player.id == room.ownerId then ownerPresent = true end
+  if player.team == 'blue' then blue = blue + 1 else orange = orange + 1 end
+end
+if not ownerPresent or redis.call('EXISTS', KEYS[5]) == 0 then
+  redis.call('DEL', KEYS[1], KEYS[3], KEYS[4], KEYS[5])
+  redis.call('ZREM', KEYS[2], room.id)
+  return 'NOT_FOUND'
+end
+if blue == 0 or orange == 0 then
+  room.status = 'waiting'
+  redis.call('DEL', KEYS[3], KEYS[4])
+end
 redis.call('SET', KEYS[1], cjson.encode(room), 'EX', 60)
 redis.call('ZADD', KEYS[2], now, room.id)
+if playerId == room.ownerId then redis.call('EXPIRE', KEYS[5], 60) end
 return 'ALIVE'
 `;
 
 export async function heartbeatGameRoom(game: GameId, id: string, playerId: string) {
   const redis = getRedis();
   if (!redis) throw new Error("STORAGE_NOT_CONFIGURED");
-  const result = await redis.eval<string[], string>(HEARTBEAT_SCRIPT, [roomKey(id), roomIndex(game)], [String(Date.now()), playerId, game]);
+  const result = await redis.eval<string[], string>(HEARTBEAT_SCRIPT, [roomKey(id), roomIndex(game), snapshotKey(id), inputsKey(id), ownerTokenKey(id)], [String(Date.now()), playerId, game]);
   if (result !== "ALIVE") throw new Error("NOT_FOUND");
   const room = await getGameRoom(game, id);
   const player = room.players.find((entry) => entry.id === playerId);
@@ -213,19 +248,74 @@ export async function heartbeatGameRoom(game: GameId, id: string, playerId: stri
   return { room, player };
 }
 
-export async function leaveGameRoom(game: GameId, id: string, playerId: string) {
+const START_ROOM_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 'NOT_FOUND' end
+local room = cjson.decode(raw)
+if room.game ~= ARGV[1] then return 'NOT_FOUND' end
+if room.ownerId ~= ARGV[2] or redis.call('GET', KEYS[2]) ~= ARGV[3] then return 'NOT_OWNER' end
+if room.status == 'playing' then return 'STARTED' end
+local blue, orange, ownerPresent = 0, 0, false
+local now = tonumber(ARGV[4])
+for _, player in ipairs(room.players) do
+  if now - tonumber(player.lastSeen) <= 30000 then
+    if player.team == 'blue' then blue = blue + 1 else orange = orange + 1 end
+    if player.id == room.ownerId then ownerPresent = true end
+  end
+end
+if not ownerPresent then return 'NOT_OWNER' end
+if blue == 0 or orange == 0 then return 'NEED_TEAMS' end
+room.status = 'playing'
+redis.call('SET', KEYS[1], cjson.encode(room), 'EX', 60)
+redis.call('EXPIRE', KEYS[2], 60)
+redis.call('DEL', KEYS[3], KEYS[4])
+redis.call('ZADD', KEYS[5], now, room.id)
+return 'STARTED'
+`;
+
+export async function startGameRoom(game: GameId, id: string, playerId: string, ownerToken: string) {
+  const redis = getRedis();
+  if (!redis) throw new Error("STORAGE_NOT_CONFIGURED");
+  const result = await redis.eval<string[], string>(START_ROOM_SCRIPT,
+    [roomKey(id), ownerTokenKey(id), snapshotKey(id), inputsKey(id), roomIndex(game)],
+    [game, playerId, ownerToken, String(Date.now())]);
+  if (result !== "STARTED") throw new Error(result);
+  return { room: await getGameRoom(game, id) };
+}
+
+const LEAVE_ROOM_SCRIPT = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 'LEFT' end
+local room = cjson.decode(raw)
+if room.game ~= ARGV[1] then return 'LEFT' end
+if room.ownerId == ARGV[2] then
+  if redis.call('GET', KEYS[5]) ~= ARGV[3] then return 'NOT_OWNER' end
+  redis.call('DEL', KEYS[1], KEYS[3], KEYS[4], KEYS[5])
+  redis.call('ZREM', KEYS[2], room.id)
+  return 'LEFT'
+end
+local players, blue, orange = {}, 0, 0
+for _, player in ipairs(room.players) do
+  if player.id ~= ARGV[2] then
+    table.insert(players, player)
+    if player.team == 'blue' then blue = blue + 1 else orange = orange + 1 end
+  end
+end
+room.players = players
+if blue == 0 or orange == 0 then
+  room.status = 'waiting'
+  redis.call('DEL', KEYS[3], KEYS[4])
+end
+redis.call('SET', KEYS[1], cjson.encode(room), 'EX', 60)
+return 'LEFT'
+`;
+
+export async function leaveGameRoom(game: GameId, id: string, playerId: string, ownerToken = "") {
   const redis = getRedis();
   if (!redis) return;
-  const room = await redis.get<GameRoom>(roomKey(id));
-  if (!room || room.game !== game) return;
-  const players = room.players.filter((player) => player.id !== playerId);
-  if (!players.length) {
-    await redis.del(roomKey(id));
-    await redis.zrem(roomIndex(game), id);
-    return;
-  }
-  const updated = { ...room, players, status: players.length > 1 ? "playing" as const : "waiting" as const };
-  await redis.set(roomKey(id), updated, { ex: ROOM_TTL_SECONDS });
+  const result = await redis.eval<string[], string>(LEAVE_ROOM_SCRIPT,
+    [roomKey(id), roomIndex(game), snapshotKey(id), inputsKey(id), ownerTokenKey(id)], [game, playerId, ownerToken]);
+  if (result === "NOT_OWNER") throw new Error("NOT_OWNER");
 }
 
 export function isValidPlayerName(value: unknown): value is string {

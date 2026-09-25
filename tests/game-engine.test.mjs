@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = await readFile(new URL("../lib/game-engine.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { createOnlineGame, createBotGame, resolveKickDirection, stepGame } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { createOnlineGame, createBotGame, botShotPower, resolveKickDirection, stepGame } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 const roster = [
   { id: "white", name: "Branco", team: "blue", joinedAt: 0, lastSeen: 0 },
@@ -13,7 +13,7 @@ const roster = [
 ];
 
 const input = (extra = {}) => ({
-  x: 0, y: 0, sprint: false, kickSeq: 0, aimX: 0, aimY: 0,
+  x: 0, y: 0, sprint: false, kickSeq: 0, dashSeq: 0, aimX: 0, aimY: 0,
   power: 0, spin: false, kickSpin: false, charging: false, ...extra,
 });
 
@@ -110,6 +110,58 @@ test("o bot do hóquei recua para defender a trajetória do disco", () => {
   assert.ok(bot.x > beforeX);
   assert.ok(bot.y > beforeY);
   assert.ok(bot.x <= 476);
+});
+
+test("o dash segue o cursor, consome estamina e respeita o intervalo", () => {
+  const state = createOnlineGame("haxball", roster);
+  const player = state.players[0];
+  state.ball.x = 300; state.ball.y = 180;
+  const before = player.x;
+  stepGame(state, { white: input({ dashSeq: 1, aimX: 300, aimY: player.y }) }, {}, 1 / 60);
+  assert.ok(player.x > before + 4);
+  assert.ok(player.stamina <= 72);
+  const stamina = player.stamina;
+  stepGame(state, { white: input({ dashSeq: 2, aimX: 300, aimY: player.y }) }, {}, 1 / 60);
+  assert.equal(player.stamina, stamina);
+});
+
+test("a força dos bots varia e não usa potência máxima", () => {
+  const state = createBotGame("haxball", { blue: 0, orange: 1 });
+  const bot = state.players[1];
+  const first = botShotPower(bot, state);
+  state.elapsed = 1.4;
+  const second = botShotPower(bot, state);
+  assert.ok(first >= 0.3 && first <= 0.74);
+  assert.ok(second >= 0.3 && second <= 0.74);
+  assert.notEqual(first, second);
+});
+
+test("haxball só conta gol quando a bola ultrapassa a linha inteira", () => {
+  const state = createOnlineGame("haxball", roster);
+  state.ball.x = 510;
+  state.ball.y = 0;
+  stepGame(state, {}, {}, 1 / 60);
+  assert.equal(state.score.blue, 0);
+  state.ball.x = 512;
+  stepGame(state, {}, {}, 1 / 60);
+  assert.equal(state.score.blue, 1);
+});
+
+test("a bola de futebol gira enquanto se move", () => {
+  const state = createOnlineGame("haxball", roster);
+  state.ball.vx = 200;
+  stepGame(state, {}, {}, 1 / 60);
+  assert.notEqual(state.ball.rotation, 0);
+});
+
+test("jogadores de hóquei se movem mais devagar e param rapidamente", () => {
+  const state = createOnlineGame("hoquei", roster);
+  const player = state.players[0];
+  state.ball.y = 180;
+  for (let frame = 0; frame < 60; frame++) stepGame(state, { white: input({ x: 1 }) }, {}, 1 / 60);
+  assert.ok(Math.hypot(player.vx, player.vy) <= 260.01);
+  for (let frame = 0; frame < 12; frame++) stepGame(state, {}, {}, 1 / 60);
+  assert.ok(Math.hypot(player.vx, player.vy) < 10);
 });
 
 test("o disco do hóquei tem limite de velocidade reduzido", () => {

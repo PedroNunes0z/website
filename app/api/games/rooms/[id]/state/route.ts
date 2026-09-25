@@ -23,6 +23,7 @@ function validInput(value: unknown): value is GameInput {
     && typeof input.kickSpin === "boolean"
     && typeof input.charging === "boolean"
     && typeof input.kickSeq === "number" && Number.isSafeInteger(input.kickSeq) && input.kickSeq >= 0
+    && typeof input.dashSeq === "number" && Number.isSafeInteger(input.dashSeq) && input.dashSeq >= 0
     && typeof input.aimX === "number" && Number.isFinite(input.aimX) && Math.abs(input.aimX) <= 1000
     && typeof input.aimY === "number" && Number.isFinite(input.aimY) && Math.abs(input.aimY) <= 1000
     && typeof input.power === "number" && input.power >= 0 && input.power <= 1;
@@ -66,14 +67,15 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const game = gameFromString(body.game ?? "");
     if (!game || typeof body.playerId !== "string" || body.playerId.length > 64) return NextResponse.json({ error: "Jogador inválido." }, { status: 400 });
     const normalizedInput = body.input && typeof body.input === "object"
-      ? { ...body.input, kickSpin: body.input.kickSpin === true, charging: body.input.charging === true }
+      ? { ...body.input, kickSpin: body.input.kickSpin === true, charging: body.input.charging === true, dashSeq: Number.isSafeInteger(body.input.dashSeq) ? body.input.dashSeq : 0 }
       : body.input;
     if (body.action === "input" && validInput(normalizedInput)) {
       await publishGameInput(game, id, body.playerId, normalizedInput);
       return NextResponse.json({ ok: true });
     }
     if (body.action === "snapshot" && validSnapshot(body.snapshot, game)) {
-      await publishGameSnapshot(game, id, body.playerId, body.snapshot);
+      if (typeof body.ownerToken !== "string" || body.ownerToken.length > 64) return NextResponse.json({ error: "Dono da sala inválido." }, { status: 403 });
+      await publishGameSnapshot(game, id, body.playerId, body.ownerToken, body.snapshot);
       return NextResponse.json({ ok: true });
     }
     return NextResponse.json({ error: "Dados inválidos." }, { status: 400 });

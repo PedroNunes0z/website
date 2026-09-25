@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { heartbeatGameRoom, joinGameRoom, leaveGameRoom, gameFromString, isValidPlayerName, type GameTeam } from "@/lib/games";
+import { heartbeatGameRoom, joinGameRoom, leaveGameRoom, startGameRoom, gameFromString, isValidPlayerName, type GameTeam } from "@/lib/games";
 import { isSameOrigin } from "@/lib/request-security";
 
 export const runtime = "nodejs";
@@ -26,9 +26,13 @@ export async function POST(request: NextRequest, context: RouteContext) {
       if (typeof body.playerId !== "string") return NextResponse.json({ error: "Jogador inválido." }, { status: 400 });
       return NextResponse.json(await heartbeatGameRoom(game, id, body.playerId));
     }
+    if (body.action === "start") {
+      if (typeof body.playerId !== "string" || typeof body.ownerToken !== "string" || body.ownerToken.length > 64) return NextResponse.json({ error: "Dono da sala inválido." }, { status: 400 });
+      return NextResponse.json(await startGameRoom(game, id, body.playerId, body.ownerToken));
+    }
     if (body.action === "leave") {
       if (typeof body.playerId !== "string") return NextResponse.json({ error: "Jogador inválido." }, { status: 400 });
-      await leaveGameRoom(game, id, body.playerId);
+      await leaveGameRoom(game, id, body.playerId, typeof body.ownerToken === "string" ? body.ownerToken : "");
       return NextResponse.json({ ok: true });
     }
     return NextResponse.json({ error: "Ação inválida." }, { status: 400 });
@@ -38,6 +42,8 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }
     if (error instanceof Error && error.message === "NOT_FOUND") return NextResponse.json({ error: "A sala expirou ou não existe." }, { status: 404 });
     if (error instanceof Error && error.message === "FULL") return NextResponse.json({ error: "A sala está cheia." }, { status: 409 });
+    if (error instanceof Error && error.message === "NEED_TEAMS") return NextResponse.json({ error: "É preciso ter ao menos um jogador em cada equipe." }, { status: 409 });
+    if (error instanceof Error && error.message === "NOT_OWNER") return NextResponse.json({ error: "Apenas o dono pode iniciar ou encerrar a sala." }, { status: 403 });
     console.error("Game room update failed:", error);
     return NextResponse.json({ error: "Não foi possível atualizar a sala." }, { status: 500 });
   }

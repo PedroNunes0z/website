@@ -5,6 +5,7 @@ export interface GameInput {
   y: number;
   sprint: boolean;
   kickSeq: number;
+  dashSeq: number;
   aimX: number;
   aimY: number;
   power: number;
@@ -32,6 +33,11 @@ export interface GameActor {
   aimY: number;
   charge: number;
   curve: boolean;
+  dashCooldown: number;
+  dashRemaining: number;
+  dashX: number;
+  dashY: number;
+  lastDashSeq: number;
 }
 
 export interface GameObject {
@@ -40,6 +46,7 @@ export interface GameObject {
   vx: number;
   vy: number;
   spin?: number;
+  rotation?: number;
 }
 
 export interface GameSnapshot {
@@ -64,7 +71,7 @@ const VIEW_HEIGHT = 760;
 const HALF_WIDTH = FIELD_WIDTH / 2;
 const HALF_HEIGHT = FIELD_HEIGHT / 2;
 const GOAL_DEPTH = { haxball: 70, hoquei: 42 };
-const emptyInput: GameInput = { x: 0, y: 0, sprint: false, kickSeq: 0, aimX: 0, aimY: 0, power: 0, spin: false, kickSpin: false, charging: false };
+const emptyInput: GameInput = { x: 0, y: 0, sprint: false, kickSeq: 0, dashSeq: 0, aimX: 0, aimY: 0, power: 0, spin: false, kickSpin: false, charging: false };
 
 interface Segment { x1: number; y1: number; x2: number; y2: number }
 
@@ -168,6 +175,7 @@ function actor(id: string, name: string, team: GameTeam, index: number, game: Ga
     stamina: 100, sprintLock: false, sprintRest: 0,
     facingX, facingY: 0, aimX: position.x + facingX * 180,
     aimY: position.y, charge: 0, curve: false,
+    dashCooldown: 0, dashRemaining: 0, dashX: 0, dashY: 0, lastDashSeq: 0,
   };
 }
 
@@ -183,13 +191,13 @@ export function createBotGame(game: GameId, bots: BotCounts): GameSnapshot {
   } else {
     players.push(actor("bot-orange-0", "BOT", "orange", 0, game, true));
   }
-  return { game, players, ball: { x: 0, y: 0, vx: 0, vy: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
+  return { game, players, ball: { x: 0, y: 0, vx: 0, vy: 0, rotation: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
 }
 
 export function createOnlineGame(game: GameId, roster: GameRoomPlayer[]): GameSnapshot {
   const indexes: Record<GameTeam, number> = { blue: 0, orange: 0 };
   const players = roster.map((player) => actor(player.id, player.name, player.team, indexes[player.team]++, game, false));
-  return { game, players, ball: { x: 0, y: 0, vx: 0, vy: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
+  return { game, players, ball: { x: 0, y: 0, vx: 0, vy: 0, rotation: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
 }
 
 export function updateOnlineRoster(state: GameSnapshot, roster: GameRoomPlayer[]) {
@@ -217,8 +225,10 @@ function resetPositions(state: GameSnapshot) {
     player.sprintLock = false;
     player.sprintRest = 0;
     player.charge = 0;
+    player.dashCooldown = 0;
+    player.dashRemaining = 0;
   });
-  state.ball = { x: 0, y: 0, vx: 0, vy: 0 };
+  state.ball = { x: 0, y: 0, vx: 0, vy: 0, rotation: 0 };
 }
 
 function scoreGoal(state: GameSnapshot, team: GameTeam) {
@@ -244,6 +254,7 @@ function keepPlayerInBounds(player: GameActor, game: GameId) {
 function steer(player: GameActor, input: GameInput, dt: number, game: GameId) {
   const length = Math.hypot(input.x, input.y) || 1;
   let sprinting = false;
+  player.dashCooldown = Math.max(0, (player.dashCooldown ?? 0) - dt);
   if (game === "haxball" && !player.bot) {
     sprinting = input.sprint && (input.x !== 0 || input.y !== 0) && !player.sprintLock && player.stamina > 0;
     if (sprinting) {
@@ -269,15 +280,35 @@ function steer(player: GameActor, input: GameInput, dt: number, game: GameId) {
       player.charge = 0;
       player.curve = false;
     }
+    if (input.dashSeq > (player.lastDashSeq ?? 0)) {
+      player.lastDashSeq = input.dashSeq;
+      const aimLength = Math.hypot(input.aimX - player.x, input.aimY - player.y);
+      if (player.stamina >= 28 && player.dashCooldown === 0 && aimLength > 3) {
+        player.stamina -= 28;
+        player.sprintRest = 0;
+        player.dashCooldown = 1.2;
+        player.dashRemaining = 0.13;
+        player.dashX = (input.aimX - player.x) / aimLength;
+        player.dashY = (input.aimY - player.y) / aimLength;
+        if (player.stamina === 0) player.sprintLock = true;
+      }
+    }
   }
-  const max = game === "haxball" ? (player.bot ? 160 : sprinting ? 250 : 190) : 540;
-  const acceleration = game === "haxball" ? 2000 : 5600;
-  player.vx += (input.x / length) * acceleration * dt;
-  player.vy += (input.y / length) * acceleration * dt;
-  if (!input.x && !input.y) {
-    const drag = Math.max(0, 1 - (game === "haxball" ? 9 : 10) * dt);
-    player.vx *= drag;
-    player.vy *= drag;
+  const dashing = game === "haxball" && (player.dashRemaining ?? 0) > 0;
+  const max = game === "haxball" ? (dashing ? 430 : player.bot ? 160 : sprinting ? 250 : 190) : 260;
+  if (dashing) {
+    player.vx = player.dashX * max;
+    player.vy = player.dashY * max;
+    player.dashRemaining = Math.max(0, player.dashRemaining - dt);
+  } else {
+    const acceleration = game === "haxball" ? 2000 : 2200;
+    player.vx += (input.x / length) * acceleration * dt;
+    player.vy += (input.y / length) * acceleration * dt;
+    if (!input.x && !input.y) {
+      const drag = Math.max(0, 1 - (game === "haxball" ? 9 : 28) * dt);
+      player.vx *= drag;
+      player.vy *= drag;
+    }
   }
   const speed = Math.hypot(player.vx, player.vy);
   if (speed > max) {
@@ -321,9 +352,15 @@ function botInput(player: GameActor, state: GameSnapshot): GameInput {
     x: distance > 8 ? clamp((targetX - player.x) / 80, -1, 1) : 0,
     y: distance > 8 ? clamp((targetY - player.y) / 80, -1, 1) : 0,
     aimX: player.team === "blue" ? HALF_WIDTH : -HALF_WIDTH,
-    aimY: clamp(ball.y * 0.25, -80, 80),
-    power: 0.75,
+    aimY: clamp(ball.y * 0.2 + Math.sin(state.elapsed * 2.1 + player.x * 0.03) * 34, -65, 65),
+    power: botShotPower(player, state),
   };
+}
+
+export function botShotPower(player: GameActor, state: GameSnapshot) {
+  const distance = Math.abs((player.team === "blue" ? HALF_WIDTH : -HALF_WIDTH) - state.ball.x);
+  const variation = (Math.sin(state.elapsed * 3.7 + player.id.length * 1.9 + player.y * 0.02) + 1) / 2;
+  return clamp(0.3 + 0.22 * (distance / FIELD_WIDTH) + 0.22 * variation, 0.3, 0.74);
 }
 
 function reflectedPuckY(y: number) {
@@ -382,7 +419,7 @@ function kick(state: GameSnapshot, player: GameActor, input: GameInput) {
   if (Math.hypot(ball.x - player.x, ball.y - player.y) > 16 + 11 + 14) return;
   const direction = resolveKickDirection(player, ball, input.aimX, input.aimY);
   if (!direction) return;
-  const speed = 850 * (0.35 + 0.65 * clamp(input.power, 0, 1));
+  const speed = 680 * (0.35 + 0.65 * clamp(input.power, 0, 1));
   ball.vx = direction.x * speed + player.vx * 0.35;
   ball.vy = direction.y * speed + player.vy * 0.35;
   ball.spin = input.kickSpin ? 8 : (ball.spin ?? 0) * 0.3;
@@ -429,6 +466,7 @@ export function stepGame(state: GameSnapshot, inputs: Record<string, GameInput>,
     if (Math.hypot(ball.vx, ball.vy) < (state.game === "haxball" ? 8 : 6)) { ball.vx = 0; ball.vy = 0; }
     ball.x += ball.vx * sub;
     ball.y += ball.vy * sub;
+    if (state.game === "haxball") ball.rotation = (ball.rotation ?? 0) + ((ball.vx * 0.25 + ball.vy * 0.2) / 11 + (ball.spin ?? 0) * 1.5) * sub;
     const max = state.game === "haxball" ? 1000 : 1050;
     for (const segment of FIELD_WALLS[state.game]) collideCircleSegment(ball, 11, segment, state.game === "haxball" ? 0.72 : 0.92);
     keepBallInBounds(ball, state.game);
@@ -453,8 +491,9 @@ export function stepGame(state: GameSnapshot, inputs: Record<string, GameInput>,
     keepBallInBounds(ball, state.game);
     const ballSpeed = Math.hypot(ball.vx, ball.vy);
     if (ballSpeed > max) { ball.vx *= max / ballSpeed; ball.vy *= max / ballSpeed; }
-    if (ball.x < -HALF_WIDTH - 4 && Math.abs(ball.y) < goalHalf - 11) { scoreGoal(state, "orange"); break; }
-    if (ball.x > HALF_WIDTH + 4 && Math.abs(ball.y) < goalHalf - 11) { scoreGoal(state, "blue"); break; }
+    const goalThreshold = HALF_WIDTH + (state.game === "haxball" ? 11 : 4);
+    if (ball.x < -goalThreshold && Math.abs(ball.y) < goalHalf - 11) { scoreGoal(state, "orange"); break; }
+    if (ball.x > goalThreshold && Math.abs(ball.y) < goalHalf - 11) { scoreGoal(state, "blue"); break; }
   }
   state.revision += 1;
 }
@@ -493,17 +532,13 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
   ctx.strokeRect(HALF_WIDTH, -goalHalf, goalDepth, goalHalf * 2);
 
   if (state.game === "haxball") {
-    ctx.lineWidth = 4;
     for (const x of [-HALF_WIDTH, HALF_WIDTH]) {
+      ctx.strokeStyle = "#fffdf9"; ctx.lineWidth = 4;
       ctx.beginPath(); ctx.moveTo(x, -goalHalf); ctx.lineTo(x, goalHalf); ctx.stroke();
       for (const y of [-goalHalf, goalHalf]) {
-        const metal = ctx.createRadialGradient(x - 2, y - 2, 1, x, y, 7);
-        metal.addColorStop(0, "#ffffff");
-        metal.addColorStop(0.5, "#d7d5d1");
-        metal.addColorStop(1, "#77736e");
-        ctx.fillStyle = metal;
+        ctx.fillStyle = "#fffdf9";
         ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = "#f7f4ef"; ctx.lineWidth = 1; ctx.stroke();
+        ctx.strokeStyle = "#171717"; ctx.lineWidth = 1.5; ctx.stroke();
       }
     }
   }
@@ -519,8 +554,8 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
         const uy = legal?.y ?? (player.aimY - player.y) / direction;
         let px = closeToBall ? state.ball.x : player.x + ux * 28;
         let py = closeToBall ? state.ball.y : player.y + uy * 28;
-        let vx = ux * 850 * (0.35 + 0.65 * player.charge);
-        let vy = uy * 850 * (0.35 + 0.65 * player.charge);
+        let vx = ux * 680 * (0.35 + 0.65 * player.charge);
+        let vy = uy * 680 * (0.35 + 0.65 * player.charge);
         let spin = player.curve ? 8 : 0;
         ctx.save();
         ctx.strokeStyle = player.team === "blue" ? "#ff8d4f" : "#fffdf9";
@@ -556,8 +591,6 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
 
   for (const player of state.players) {
     const radius = state.game === "haxball" ? 16 : 24;
-    ctx.beginPath(); ctx.arc(player.x + 4, player.y + 6, radius + 2, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0,0,0,.45)"; ctx.fill();
     ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2);
     ctx.fillStyle = player.team === "blue" ? "#fffdf9" : "#ff8d4f"; ctx.fill();
     ctx.lineWidth = player.id === localPlayerId ? 4 : 2;
@@ -578,11 +611,43 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
     ctx.fillText(player.name.slice(0, 12), player.x, player.y - radius - (state.game === "haxball" ? 41 : 13));
   }
 
-  ctx.beginPath(); ctx.arc(state.ball.x + 3, state.ball.y + 4, 12, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fill();
-  ctx.beginPath(); ctx.arc(state.ball.x, state.ball.y, 11, 0, Math.PI * 2);
-  ctx.fillStyle = state.game === "haxball" ? "#fffdf9" : "#ff8d4f"; ctx.fill();
-  ctx.lineWidth = 2; ctx.strokeStyle = "#050505"; ctx.stroke();
+  ctx.save();
+  ctx.translate(state.ball.x, state.ball.y);
+  if (state.game === "haxball") {
+    ctx.rotate(state.ball.rotation ?? 0);
+    ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.clip();
+    ctx.fillStyle = "#fffdf9"; ctx.fillRect(-11, -11, 22, 22);
+    ctx.fillStyle = "#080808"; ctx.strokeStyle = "#080808"; ctx.lineWidth = 1;
+    for (let point = 0; point < 5; point++) {
+      const angle = -Math.PI / 2 + point * Math.PI * 2 / 5;
+      const x = Math.cos(angle) * 5.1;
+      const y = Math.sin(angle) * 5.1;
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(Math.cos(angle) * 8.2, Math.sin(angle) * 8.2); ctx.stroke();
+    }
+    ctx.beginPath();
+    for (let point = 0; point < 5; point++) {
+      const angle = -Math.PI / 2 + point * Math.PI * 2 / 5;
+      if (point === 0) ctx.moveTo(Math.cos(angle) * 5.1, Math.sin(angle) * 5.1);
+      else ctx.lineTo(Math.cos(angle) * 5.1, Math.sin(angle) * 5.1);
+    }
+    ctx.closePath(); ctx.fill();
+    for (let patch = 0; patch < 5; patch++) {
+      const angle = -Math.PI / 2 + patch * Math.PI * 2 / 5;
+      ctx.beginPath();
+      for (const [radius, offset] of [[8, -0.27], [12, -0.29], [12, 0.29], [8, 0.27]]) {
+        const x = Math.cos(angle + offset) * radius;
+        const y = Math.sin(angle + offset) * radius;
+        if (radius === 8 && offset < 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.beginPath(); ctx.arc(0, 0, 10.2, 0, Math.PI * 2); ctx.strokeStyle = "#080808"; ctx.lineWidth = 1.6; ctx.stroke();
+  } else {
+    ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff8d4f"; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = "#050505"; ctx.stroke();
+  }
+  ctx.restore();
   ctx.restore();
 }
 
