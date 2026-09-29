@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gameFromString, getGameRoomState, publishGameInput, publishGameSnapshot } from "@/lib/games";
+import { publishRoomEvent } from "@/lib/ably";
+import { REALTIME_VERSION } from "@/lib/realtime";
 import { isSameOrigin } from "@/lib/request-security";
 import type { GameInput, GameSnapshot } from "@/lib/game-engine";
 
@@ -71,11 +73,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
       : body.input;
     if (body.action === "input" && validInput(normalizedInput)) {
       await publishGameInput(game, id, body.playerId, normalizedInput);
+      // Fire-and-forget: o Ably não pode bloquear ou derrubar a escrita (requisito 11).
+      void publishRoomEvent(id, "game-input-updated", { v: REALTIME_VERSION, playerId: body.playerId, input: normalizedInput });
       return NextResponse.json({ ok: true });
     }
     if (body.action === "snapshot" && validSnapshot(body.snapshot, game)) {
       if (typeof body.ownerToken !== "string" || body.ownerToken.length > 64) return NextResponse.json({ error: "Dono da sala inválido." }, { status: 403 });
       await publishGameSnapshot(game, id, body.playerId, body.ownerToken, body.snapshot);
+      void publishRoomEvent(id, "game-snapshot-updated", { v: REALTIME_VERSION, playerId: body.playerId, snapshot: body.snapshot });
       return NextResponse.json({ ok: true });
     }
     return NextResponse.json({ error: "Dados inválidos." }, { status: 400 });

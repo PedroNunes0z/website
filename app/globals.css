@@ -468,6 +468,15 @@ img { max-width: 100%; }
 .game-board-wrap:fullscreen .game-board-hud, .game-board-wrap:fullscreen .game-board-footer { flex: none; }
 @media (prefers-reduced-motion: reduce) { .game-goal-overlay { animation: none; } }
 .game-board-footer { min-height: 48px; padding: .65rem 1.5rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .66rem; }
+.game-board-footer-right { display: inline-flex; align-items: center; gap: 1rem; }
+.game-conn { display: inline-flex; align-items: center; gap: .45rem; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-size: .6rem; }
+.game-conn-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.game-conn-connected { color: #7ddba3; }
+.game-conn-connecting, .game-conn-disconnected, .game-conn-suspended { color: #f0b45c; }
+.game-conn-connecting .game-conn-dot, .game-conn-disconnected .game-conn-dot, .game-conn-suspended .game-conn-dot { animation: game-conn-pulse 1.2s ease-in-out infinite; }
+.game-conn-failed, .game-conn-fallback { color: #ff9c72; }
+@keyframes game-conn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .game-conn-dot { animation: none; } }
 .game-notes { padding: 1.5rem 0; display: flex; justify-content: space-between; align-items: center; gap: 2rem; color: var(--muted); font-size: .68rem; }
 .game-notes > div { display: flex; align-items: center; gap: .55rem; color: var(--orange); }
 .game-notes p { max-width: 430px; text-align: right; }

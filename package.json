@@ -10,6 +10,7 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test:games": "node --test tests/game-engine.test.mjs",
+    "test:realtime": "node --test tests/realtime.test.mjs",
     "test:comments": "node --test tests/comment-moderation.test.mjs",
     "test:articles": "node --test tests/youtube.test.mjs",
     "hash-password": "node scripts/hash-password.mjs"
@@ -22,6 +23,7 @@
     "@react-three/fiber": "^9.4.0",
     "@upstash/redis": "^1.35.6",
     "@vercel/blob": "^2.0.0",
+    "ably": "^2.29.0",
     "bcryptjs": "^3.0.2",
     "jose": "^6.1.2",
     "lucide-react": "^0.468.0",

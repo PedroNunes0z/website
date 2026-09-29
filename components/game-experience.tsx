@@ -5,11 +5,22 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createBotGame, createOnlineGame, drawGame, pointerToField, stepGame, updateOnlineRoster, type BotCounts, type GameInput, type GameSnapshot } from "@/lib/game-engine";
 import type { GameId, GameRoom, GameTeam } from "@/lib/games";
+import { isVersionedEvent, type RealtimeClientEvent } from "@/lib/realtime";
+import { useAblyRoom, type RealtimeStatus } from "@/lib/use-ably-room";
 
 const labels = { haxball: "Haxball", hoquei: "Hóquei" };
 const descriptions = {
   haxball: "Futebol de arena com chute carregado, movimentação e até cinco jogadores por equipe.",
   hoquei: "Hóquei de mesa em uma partida rápida de sete gols. Um jogador por equipe.",
+};
+
+const connLabels: Record<Exclude<RealtimeStatus, "idle">, string> = {
+  connecting: "Conectando ao tempo real…",
+  connected: "Tempo real ativo",
+  disconnected: "Reconectando à sala…",
+  suspended: "Conexão instável — tentando de novo…",
+  failed: "Tempo real indisponível — modo compatibilidade (HTTP)",
+  fallback: "Modo compatibilidade (HTTP)",
 };
 
 type RoomResponse = { room: GameRoom; playerId?: string; ownerToken?: string; player?: { id: string; team: GameTeam } };
@@ -165,46 +176,136 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     return () => { cancelAnimationFrame(frame); observer.disconnect(); };
   }, [game, mode, playerId, ownerToken]);
 
+  const lastResyncRef = useRef(0);
+
+  // Sincronização autoritativa via API: na entrada na sala, após reconexões e
+  // de forma periódica quando o tempo real não está ativo (fallback HTTP).
+  const resync = useCallback(async (): Promise<boolean> => {
+    if (mode !== "online" || !roomId || !playerId) return false;
+    try {
+      const response = await fetch(`/api/games/rooms/${roomId}/state?game=${game}`, { cache: "no-store" });
+      if (response.status === 404) {
+        onRoomUpdate(null);
+        return false;
+      }
+      const state = await readResponse<{ room: GameRoom; snapshot: GameSnapshot | null; inputs: Record<string, GameInput> }>(response);
+      roomRef.current = state.room;
+      onRoomUpdate(state.room);
+      remoteInputsRef.current = state.inputs;
+      const host = state.room.ownerId === playerId && !!ownerToken;
+      if (!host && state.room.status === "playing" && state.snapshot) stateRef.current = state.snapshot;
+      setNetworkError("");
+      return true;
+    } catch (error) {
+      setNetworkError(error instanceof Error ? error.message : "Conexão indisponível.");
+      return false;
+    }
+  }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate]);
+
+  const requestResync = useCallback((force = false) => {
+    const now = Date.now();
+    // Evita rajadas de ressincronização quando vários eventos chegam juntos.
+    if (!force && now - lastResyncRef.current < 1500) return;
+    lastResyncRef.current = now;
+    void resync();
+  }, [resync]);
+
+  const handleRealtimeEvent = useCallback((event: RealtimeClientEvent) => {
+    if (event.type === "resync") {
+      requestResync(true);
+      return;
+    }
+    const data = event.data;
+    // Versão desconhecida: ignora o payload e ressincroniza pela API.
+    if (!isVersionedEvent(data)) {
+      requestResync();
+      return;
+    }
+    const currentRoom = roomRef.current;
+    const host = currentRoom?.ownerId === playerId && !!ownerToken;
+    switch (event.name) {
+      case "game-snapshot-updated":
+        if (!host && data.playerId !== playerId && currentRoom?.status === "playing" && data.snapshot) stateRef.current = data.snapshot;
+        break;
+      case "game-input-updated":
+        if (host && data.playerId && data.playerId !== playerId && data.input) remoteInputsRef.current[data.playerId] = data.input;
+        break;
+      case "game-state-updated":
+      case "player-joined":
+      case "player-left":
+        if (data.room) {
+          roomRef.current = data.room;
+          onRoomUpdate(data.room);
+        } else {
+          requestResync();
+        }
+        break;
+      case "game-ended":
+        onRoomUpdate(null);
+        break;
+    }
+  }, [playerId, ownerToken, onRoomUpdate, requestResync]);
+
+  const realtimeStatus = useAblyRoom({
+    roomId: mode === "online" ? roomId : null,
+    game,
+    playerId: mode === "online" ? playerId : null,
+    onEvent: handleRealtimeEvent,
+  });
+  const realtimeLive = realtimeStatus === "connected";
+
+  // Escritas: sempre via HTTP, validadas e persistidas pelo servidor, que as
+  // republica no Ably. Funciona com ou sem tempo real ativo.
   useEffect(() => {
     if (mode !== "online" || !roomId || !playerId) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
-    const sync = async () => {
+    const write = async () => {
       let nextDelay = 150;
       try {
         const base = `/api/games/rooms/${roomId}/state`;
         const currentRoom = roomRef.current;
         const host = currentRoom?.ownerId === playerId && !!ownerToken;
-        const requests: Promise<unknown>[] = [
+        const requests: Promise<Response>[] = [
           fetch(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId, action: "input", input: inputRef.current }), cache: "no-store" }),
         ];
         if (host && currentRoom?.status === "playing") requests.push(fetch(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current }), cache: "no-store" }));
-        const [stateResponse, ...writes] = await Promise.all([
-          fetch(`${base}?game=${game}`, { cache: "no-store" }),
-          ...requests,
-        ]);
+        const responses = await Promise.all(requests);
         if (!active) return;
-        for (const write of writes) if (write instanceof Response && !write.ok) {
-          if (write.status === 404) { active = false; onRoomUpdate(null); return; }
-          throw new Error("Conexão com a partida interrompida.");
+        for (const response of responses) {
+          if (response.status === 404) {
+            active = false;
+            onRoomUpdate(null);
+            return;
+          }
+          if (!response.ok) throw new Error("Conexão com a partida interrompida.");
         }
-        if ((stateResponse as Response).status === 404) { active = false; onRoomUpdate(null); return; }
-        const state = await readResponse<{ room: GameRoom; snapshot: GameSnapshot | null; inputs: Record<string, GameInput> }>(stateResponse as Response);
-        roomRef.current = state.room;
-        onRoomUpdate(state.room);
-        remoteInputsRef.current = state.inputs;
-        if (!host && state.room.status === "playing" && state.snapshot) stateRef.current = state.snapshot;
         setNetworkError("");
       } catch (error) {
         nextDelay = 1000;
         if (active) setNetworkError(error instanceof Error ? error.message : "Conexão indisponível.");
       } finally {
-        if (active) timer = setTimeout(sync, nextDelay);
+        if (active) timer = setTimeout(write, nextDelay);
       }
     };
-    void sync();
+    void write();
     return () => { active = false; clearTimeout(timer); };
   }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate]);
+
+  // Leituras por polling: ativas somente quando o tempo real não está
+  // conectado (fallback ou reconectando). Quando o Ably volta, o polling para.
+  useEffect(() => {
+    if (mode !== "online" || !roomId || !playerId || realtimeLive) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const read = async () => {
+      if (!active) return;
+      const ok = await resync();
+      if (active) timer = setTimeout(read, ok ? 150 : 1000);
+    };
+    void read();
+    return () => { active = false; clearTimeout(timer); };
+  }, [game, mode, roomId, playerId, realtimeLive, resync]);
 
   const updateAim = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -261,7 +362,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong>{goalNotice.blue} <i>—</i> {goalNotice.orange}</strong><small>Equipe {goalNotice.team === "blue" ? "branca" : "laranja"} marcou</small></div>}
       {hud.winner && !goalNotice && <div className="game-waiting">Equipe {hud.winner === "blue" ? "branca" : "laranja"} venceu.</div>}
     </div>
-    <div className="game-board-footer"><span>WASD ou setas: mover {game === "haxball" ? " · Segure o clique: chute · Shift: correr · F: curva · Q: dash para o cursor" : " · Empurre o disco para marcar"}</span>{(mode === "bot" || isHost) && <button type="button" onClick={reset}><RefreshCcw size={15} /> Reiniciar</button>}</div>
+    <div className="game-board-footer"><span>WASD ou setas: mover {game === "haxball" ? " · Segure o clique: chute · Shift: correr · F: curva · Q: dash para o cursor" : " · Empurre o disco para marcar"}</span><span className="game-board-footer-right">{mode === "online" && realtimeStatus !== "idle" && <span className={`game-conn game-conn-${realtimeStatus}`} role="status" aria-live="polite"><span className="game-conn-dot" aria-hidden="true" />{connLabels[realtimeStatus]}</span>}{(mode === "bot" || isHost) && <button type="button" onClick={reset}><RefreshCcw size={15} /> Reiniciar</button>}</span></div>
     {networkError && <p className="game-error" role="status">{networkError}</p>}
   </div>;
 }
@@ -269,7 +370,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 export function GameExperience({ game }: { game: GameId }) {
   const [mode, setMode] = useState<"bot" | "online">("bot");
   const [bots, setBots] = useState<BotCounts>({ blue: 1, orange: 2 });
-  const [name, setName] = useState(() => typeof window === "undefined" ? "" : (localStorage.getItem("pedro-games-name") ?? ""));
+  const [name, setName] = useState(() => typeof window === "undefined" ? "" : (sessionStorage.getItem("pedro-games-name") ?? ""));
   const [team, setTeam] = useState<GameTeam>("orange");
   const [roomCode, setRoomCode] = useState("");
   const [rooms, setRooms] = useState<GameRoom[]>([]);
@@ -338,7 +439,7 @@ export function GameExperience({ game }: { game: GameId }) {
     if (name.trim().length < 2) { setError("Informe um nome com pelo menos dois caracteres."); return; }
     setBusy(true); setError("");
     try {
-      localStorage.setItem("pedro-games-name", name.trim());
+      sessionStorage.setItem("pedro-games-name", name.trim());
       const response = await fetch("/api/games/rooms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, name: name.trim() }) });
       const data = await readResponse<RoomResponse>(response);
       setRoom(data.room); setPlayerId(data.playerId ?? null); setOwnerToken(data.ownerToken ?? null);
@@ -352,7 +453,7 @@ export function GameExperience({ game }: { game: GameId }) {
     if (name.trim().length < 2) { setError("Informe um nome com pelo menos dois caracteres."); return; }
     setBusy(true); setError("");
     try {
-      localStorage.setItem("pedro-games-name", name.trim());
+      sessionStorage.setItem("pedro-games-name", name.trim());
       const freshId = crypto.randomUUID();
       const response = await fetch(`/api/games/rooms/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, name: name.trim(), playerId: freshId, team, action: "join" }) });
       const data = await readResponse<RoomResponse>(response);
