@@ -167,43 +167,77 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
   useEffect(() => {
     if (mode !== "online" || !roomId || !playerId) return;
+
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+    let socket: WebSocket | null = null;
+    let socketReady = false;
+    const websocketUrl = process.env.NEXT_PUBLIC_GAME_WS_URL;
+
+    const applyState = (state: { room: GameRoom; snapshot: GameSnapshot | null; inputs: Record<string, GameInput> }) => {
+      roomRef.current = state.room;
+      onRoomUpdate(state.room);
+      remoteInputsRef.current = state.inputs;
+      const host = state.room.ownerId === playerId && !!ownerToken;
+      if (!host && state.room.status === "playing" && state.snapshot) stateRef.current = state.snapshot;
+      setNetworkError("");
+    };
+
+    const send = (message: Record<string, unknown>) => {
+      if (socketReady && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+    };
+
+    const startWebSocket = () => {
+      if (!websocketUrl) return false;
+      try {
+        socket = new WebSocket(`${websocketUrl.replace(/\/$/, "")}/rooms/${roomId}?game=${game}&playerId=${encodeURIComponent(playerId)}`);
+        socket.onopen = () => {
+          socketReady = true;
+          setNetworkError("");
+        };
+        socket.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data) as { type?: string; state?: Parameters<typeof applyState>[0]; error?: string };
+            if (message.type === "state" && message.state) applyState(message.state);
+            if (message.type === "error") setNetworkError(message.error ?? "Conexão indisponível.");
+          } catch { setNetworkError("Resposta inválida do servidor de jogo."); }
+        };
+        socket.onerror = () => { socketReady = false; };
+        socket.onclose = () => { socketReady = false; };
+        return true;
+      } catch { return false; }
+    };
+
     const sync = async () => {
-      let nextDelay = 150;
+      let nextDelay = 250;
       try {
         const base = `/api/games/rooms/${roomId}/state`;
         const currentRoom = roomRef.current;
         const host = currentRoom?.ownerId === playerId && !!ownerToken;
-        const requests: Promise<unknown>[] = [
-          fetch(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId, action: "input", input: inputRef.current }), cache: "no-store" }),
-        ];
-        if (host && currentRoom?.status === "playing") requests.push(fetch(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current }), cache: "no-store" }));
-        const [stateResponse, ...writes] = await Promise.all([
-          fetch(`${base}?game=${game}`, { cache: "no-store" }),
-          ...requests,
-        ]);
+        const writes = [fetch(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId, action: "input", input: inputRef.current }), cache: "no-store" })];
+        if (host && currentRoom?.status === "playing") writes.push(fetch(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current }), cache: "no-store" }));
+        const [stateResponse] = await Promise.all([fetch(`${base}?game=${game}`, { cache: "no-store" }), ...writes]);
         if (!active) return;
-        for (const write of writes) if (write instanceof Response && !write.ok) {
-          if (write.status === 404) { active = false; onRoomUpdate(null); return; }
-          throw new Error("Conexão com a partida interrompida.");
-        }
-        if ((stateResponse as Response).status === 404) { active = false; onRoomUpdate(null); return; }
-        const state = await readResponse<{ room: GameRoom; snapshot: GameSnapshot | null; inputs: Record<string, GameInput> }>(stateResponse as Response);
-        roomRef.current = state.room;
-        onRoomUpdate(state.room);
-        remoteInputsRef.current = state.inputs;
-        if (!host && state.room.status === "playing" && state.snapshot) stateRef.current = state.snapshot;
-        setNetworkError("");
+        if (stateResponse.status === 404) { active = false; onRoomUpdate(null); return; }
+        const state = await readResponse<Parameters<typeof applyState>[0]>(stateResponse);
+        applyState(state);
       } catch (error) {
         nextDelay = 1000;
         if (active) setNetworkError(error instanceof Error ? error.message : "Conexão indisponível.");
       } finally {
-        if (active) timer = setTimeout(sync, nextDelay);
+        if (active && !socketReady) timer = setTimeout(sync, nextDelay);
       }
     };
-    void sync();
-    return () => { active = false; clearTimeout(timer); };
+
+    const hasWebSocket = startWebSocket();
+    const sendLoop = window.setInterval(() => {
+      if (!hasWebSocket || !socketReady) return;
+      const currentRoom = roomRef.current;
+      send({ type: "input", game, playerId, input: inputRef.current });
+      if (currentRoom?.ownerId === playerId && ownerToken && currentRoom.status === "playing") send({ type: "snapshot", game, playerId, ownerToken, snapshot: stateRef.current });
+    }, 100);
+    if (!hasWebSocket) void sync();
+    return () => { active = false; clearTimeout(timer); window.clearInterval(sendLoop); socket?.close(); };
   }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate]);
 
   const updateAim = (event: React.PointerEvent<HTMLCanvasElement>) => {
