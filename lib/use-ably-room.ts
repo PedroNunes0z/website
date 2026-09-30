@@ -42,6 +42,8 @@ export function useAblyRoom({ roomId, game, playerId, onEvent }: UseAblyRoomOpti
 
   useEffect(() => {
     if (!roomId || !playerId) return;
+    const logPrefix = `[Ably] game-room:${roomId}`;
+    const log = (message: string, ...extra: unknown[]) => console.info(`${logPrefix} ${message}`, ...extra);
     let disposed = false;
     let client: Ably.Realtime | null = null;
     let listener: ((message: Ably.Message) => void) | null = null;
@@ -77,10 +79,15 @@ export function useAblyRoom({ roomId, game, playerId, onEvent }: UseAblyRoomOpti
           break;
         } catch (error) {
           if (error instanceof TokenHttpError && (error.status === 503 || (error.status < 500 && error.status !== 429))) {
+            const reason = error.status === 503
+              ? "tempo real não configurado no servidor"
+              : `servidor recusou o token (HTTP ${error.status})`;
+            log(`conexão em tempo real indisponível: ${reason}; usando fallback HTTP.`);
             updateStatus("fallback");
             return;
           }
           if (attempt === 2) {
+            log("não foi possível alcançar o servidor de tokens; usando fallback HTTP.", error);
             updateStatus("fallback");
             return;
           }
@@ -107,6 +114,11 @@ export function useAblyRoom({ roomId, game, playerId, onEvent }: UseAblyRoomOpti
         switch (change.current) {
           case "connected": {
             updateStatus("connected");
+            log(
+              previouslyConnected
+                ? `conexão em tempo real restabelecida; ressincronizando estado via API.`
+                : `conexão em tempo real ativa (clientId=${client?.auth.clientId ?? playerId}); polling de leitura suspenso.`,
+            );
             // Sincronização inicial e ressincronização pós-queda: corrige
             // qualquer evento perdido buscando o estado autoritativo via API.
             emit({ type: "resync", reason: previouslyConnected ? "reconnected" : "connected" });
@@ -119,13 +131,16 @@ export function useAblyRoom({ roomId, game, playerId, onEvent }: UseAblyRoomOpti
             break;
           case "disconnected":
             updateStatus("disconnected");
+            log("conexão em tempo real caiu; reconectando com backoff e mantendo o jogo via fallback HTTP.");
             break;
           case "suspended":
             updateStatus("suspended");
+            log(`conexão em tempo real suspensa; novas tentativas com backoff e fallback HTTP ativo.`, change.reason ?? "");
             break;
           case "failed":
           case "closed":
             updateStatus("failed");
+            log(`conexão em tempo real falhou; usando fallback HTTP definitivamente nesta sessão.`, change.reason ?? "");
             break;
           default:
             break;
@@ -133,7 +148,12 @@ export function useAblyRoom({ roomId, game, playerId, onEvent }: UseAblyRoomOpti
       });
 
       const channel = client.channels.get(roomChannelName(roomId));
+      let firstMessageLogged = false;
       listener = (message: Ably.Message) => {
+        if (!firstMessageLogged) {
+          firstMessageLogged = true;
+          log(`primeiro evento recebido no canal ("${message.name ?? "?"}") — fluxo em tempo real funcionando.`);
+        }
         emit({ type: "message", name: message.name ?? "", data: (message.data ?? null) as RoomEventData | null });
       };
       for (const name of ROOM_EVENT_NAMES) channel.subscribe(name, listener);
