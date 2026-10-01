@@ -62,6 +62,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const [networkError, setNetworkError] = useState("");
   const [metrics, setMetrics] = useState({ ping: 0, fps: 60 });
   const pingRef = useRef(0);
+  const fpsRef = useRef(60);
+  const transportRef = useRef<RealtimeStatus>("idle");
+  const netStatsRef = useRef({ snapshots: 0, writes: 0, driftMs: 0, lastDiag: 0 });
   
   const roomId = room?.id ?? null;
   const roomStatus = room?.status;
@@ -140,6 +143,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
       if (now - fpsWindowStart >= 500) {
         const fps = Math.round((fpsFrames * 1000) / (now - fpsWindowStart));
+        fpsRef.current = fps;
         // Flush único a cada 500ms: evita re-render por medição de rede.
         setMetrics({ ping: pingRef.current, fps });
         fpsFrames = 0;
@@ -161,7 +165,12 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       } else if (mode === "online" && playerId && currentRoom?.status === "playing") {
         if (host) updateOnlineRoster(stateRef.current, currentRoom.players);
         stepGame(stateRef.current, { ...remoteInputsRef.current, [playerId]: inputRef.current }, lastKicksRef.current, dt, { authoritative: host });
-        if (!host) reconcileAuthoritativeState(stateRef.current, targetRef.current, playerId, dt);
+        if (!host) {
+          reconcileAuthoritativeState(stateRef.current, targetRef.current, playerId, dt);
+          // Atraso efetivo da sincronização: quanto o relógio local está à
+          // frente do último snapshot do host (≈ latência de publicação).
+          if (targetRef.current) netStatsRef.current.driftMs = Math.round((stateRef.current.elapsed - targetRef.current.elapsed) * 1000);
+        }
       }
 
       if (game === "haxball" && mode === "online" && !host && playerId) {
@@ -234,6 +243,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         score: { ...snapshot.score },
       };
       hasAuthoritativeRef.current = true;
+      console.info(`[Net] Estado autoritativo adotado (rev=${snapshot.revision}, relógio=${snapshot.elapsed.toFixed(2)}s${hard ? ", adoção dura" : ""}).`);
     }
   }, []);
 
@@ -302,6 +312,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         // inteiro a cada snapshot faz o convidado enxergar uma posição de
         // ~100–250 ms atrás (publicação + entrega) e sentir o jogo travando.
         if (!host && data.playerId !== playerId && currentRoom?.status === "playing" && data.snapshot) {
+          netStatsRef.current.snapshots += 1;
           acceptTarget(data.snapshot);
         }
         break;
@@ -335,6 +346,14 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   });
   const realtimeLive = realtimeStatus === "connected";
 
+  // Diagnóstico de transporte: deixa claro no console se o fluxo usa o canal
+  // Ably ou caiu para o polling HTTP (que tem mais latência).
+  useEffect(() => {
+    transportRef.current = realtimeStatus;
+    if (realtimeStatus === "connected") console.info("[Net] Tempo real via Ably ativo — eventos do canal da sala em uso.");
+    else if (realtimeStatus === "fallback") console.info("[Net] Ably indisponível — sincronização por polling HTTP (mais lag).");
+  }, [realtimeStatus]);
+
   useEffect(() => {
     if (mode !== "online" || !roomId || !playerId) return;
     let active = true;
@@ -343,6 +362,19 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     const write = async () => {
       let nextDelay = 50;
       const startedAt = performance.now();
+      const stats = netStatsRef.current;
+      stats.writes += 1;
+      // Resumo de rede a cada ~2s: transporte, latência, taxas e atraso de sync.
+      if (stats.lastDiag === 0) stats.lastDiag = startedAt;
+      const diagWindow = startedAt - stats.lastDiag;
+      if (diagWindow >= 2000) {
+        const via = transportRef.current === "connected" ? "ably" : `http (${transportRef.current})`;
+        const isHostNow = roomRef.current?.ownerId === playerId && !!ownerToken;
+        console.info(`[Net] sala=${roomId} via=${via} ping=${pingRef.current}ms fps=${Math.round(fpsRef.current)} snapshots=${Math.round((stats.snapshots * 1000) / diagWindow)}/s escritas=${Math.round((stats.writes * 1000) / diagWindow)}/s atraso=${stats.driftMs}ms host=${isHostNow ? "sim" : "não"}`);
+        stats.snapshots = 0;
+        stats.writes = 0;
+        stats.lastDiag = startedAt;
+      }
 
       try {
         const base = `/api/games/rooms/${roomId}/state`;
@@ -674,11 +706,11 @@ export function GameExperience({ game }: { game: GameId }) {
                   <h2>Entre em campo.</h2>
                   <p>Sem conta. Escolha um nome, crie uma sala ou entre em uma partida em andamento.</p>
                 </div>
-                <div className="game-name-row">
+                <div className="game-online-controls">
                   <label>Seu nome
-                    <input value={name} maxLength={20} onChange={(event) => setName(event.target.value)} placeholder="Nome" />
+                    <input value={name} maxLength={20} onChange={(event) => setName(event.target.value)} placeholder="Nome" onKeyDown={(event) => { if (event.key === "Enter" && !busy && name.trim().length >= 2) void createRoom(); }} />
                   </label>
-                  <button type="button" className="button ghost" onClick={() => { if (name.trim().length >= 2) setMode("online"); }}>Salvar</button>
+                  <button type="button" className="game-primary-button" disabled={busy || name.trim().length < 2} onClick={() => void createRoom()}>Criar sala <ArrowRight size={15} /></button>
                 </div>
               </div>
 
