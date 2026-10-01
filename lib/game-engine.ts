@@ -611,12 +611,22 @@ export function reconcileAuthoritativeState(
 
   const ball = local.ball;
   const authoritativeBall = target.ball;
-  const ballX = authoritativeBall.x - ball.x;
-  const ballY = authoritativeBall.y - ball.y;
+  // Compensação de latência da bola: o snapshot publicado pelo host chega com
+  // o atraso da rede e a simulação local está alguns milissegundos à frente
+  // (local.elapsed - target.elapsed ≈ latência). Extrapolar a bola pela própria
+  // velocidade nesse intervalo faz o convidado ver a bola no presente, e não
+  // onde ela estava quando o host publicou — é o que mata a sensação de lag.
+  const ballDelay = target.freeze > 0 ? 0 : clamp(local.elapsed - target.elapsed, 0, 0.25);
+  const targetBallSpeed = Math.hypot(authoritativeBall.vx, authoritativeBall.vy);
+  const ballLead = targetBallSpeed > 30 ? ballDelay : 0;
+  const authoritativeBallX = authoritativeBall.x + authoritativeBall.vx * ballLead;
+  const authoritativeBallY = authoritativeBall.y + authoritativeBall.vy * ballLead;
+  const ballX = authoritativeBallX - ball.x;
+  const ballY = authoritativeBallY - ball.y;
   const ballDistance = Math.hypot(ballX, ballY);
   if (ballDistance > SNAP_DISTANCE) {
-    ball.x = authoritativeBall.x;
-    ball.y = authoritativeBall.y;
+    ball.x = authoritativeBallX;
+    ball.y = authoritativeBallY;
     ball.vx = authoritativeBall.vx;
     ball.vy = authoritativeBall.vy;
     ball.spin = authoritativeBall.spin;

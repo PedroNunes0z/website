@@ -456,6 +456,12 @@ img { max-width: 100%; }
 .game-canvas { width: 100%; aspect-ratio: 1160 / 760; display: block; outline: none; touch-action: none; cursor: crosshair; }
 .game-canvas:focus-visible { outline: 2px solid var(--orange); outline-offset: -2px; }
 .game-waiting { position: absolute; top: 50%; left: 50%; padding: 1rem 1.3rem; border: 1px solid var(--orange); background: rgba(5,5,5,.92); color: var(--white); text-align: center; font-size: .8rem; transform: translate(-50%, -50%); pointer-events: none; }
+.game-net-hud { position: absolute; top: .9rem; right: .9rem; z-index: 3; display: flex; flex-direction: column; align-items: flex-start; gap: .3rem; padding: .55rem .8rem; border: 1px solid var(--line); background: rgba(5, 5, 5, .82); font-family: var(--mono); font-size: .6rem; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); pointer-events: none; }
+.game-net-hud span { display: inline-flex; align-items: center; gap: .45rem; font-variant-numeric: tabular-nums; }
+.game-net-hud i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.game-net-hud-ok { color: #7ddba3; }
+.game-net-hud-mid { color: #f0b45c; }
+.game-net-hud-bad { color: #ff7262; }
 .game-goal-overlay { position: absolute; top: 50%; left: 50%; z-index: 2; min-width: min(420px, 86%); padding: 1.5rem 2.5rem; display: flex; flex-direction: column; align-items: center; gap: .25rem; border: 1px solid var(--orange); background: rgba(8, 8, 8, .94); box-shadow: 0 0 70px rgba(255, 141, 79, .24); color: var(--white); text-align: center; transform: translate(-50%, -50%); pointer-events: none; animation: game-goal-appear 420ms ease-out both; }
 .game-goal-overlay span { color: var(--orange); font-family: var(--display); font-size: clamp(1.5rem, 4vw, 3rem); letter-spacing: .12em; }
 .game-goal-overlay strong { font-family: var(--display); font-size: clamp(2.4rem, 6vw, 5rem); line-height: 1; }

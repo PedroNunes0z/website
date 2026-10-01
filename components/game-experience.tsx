@@ -60,14 +60,12 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const [goalNotice, setGoalNotice] = useState<{ team: GameTeam; blue: number; orange: number; id: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [networkError, setNetworkError] = useState("");
-  const [metrics, setMetrics] = useState({ ping: 0, fps: 60, lastSnapshotTime: 0, snapshotCount: 0 });
+  const [metrics, setMetrics] = useState({ ping: 0, fps: 60 });
+  const pingRef = useRef(0);
   
   const roomId = room?.id ?? null;
   const roomStatus = room?.status;
   const isHost = mode === "online" && room?.ownerId === playerId && !!ownerToken;
-
-  const pingColor = metrics.ping < 80 ? "#4ade80" : metrics.ping < 180 ? "#facc15" : "#f87171";
-  const fpsColor = metrics.fps > 55 ? "#4ade80" : metrics.fps > 35 ? "#facc15" : "#f87171";
 
   useEffect(() => { roomRef.current = room; }, [room]);
 
@@ -141,8 +139,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       fpsFrames += 1;
 
       if (now - fpsWindowStart >= 500) {
-        const fps = (fpsFrames * 1000) / (now - fpsWindowStart);
-        setMetrics((prev) => ({ ...prev, fps: Math.round(fps) }));
+        const fps = Math.round((fpsFrames * 1000) / (now - fpsWindowStart));
+        // Flush único a cada 500ms: evita re-render por medição de rede.
+        setMetrics({ ping: pingRef.current, fps });
         fpsFrames = 0;
         fpsWindowStart = now;
       }
@@ -162,12 +161,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       } else if (mode === "online" && playerId && currentRoom?.status === "playing") {
         if (host) updateOnlineRoster(stateRef.current, currentRoom.players);
         stepGame(stateRef.current, { ...remoteInputsRef.current, [playerId]: inputRef.current }, lastKicksRef.current, dt, { authoritative: host });
-        if (!host) {
-          if (targetRef.current) {
-            console.debug(`[Game] Guest reconcile: local_elapsed=${stateRef.current.elapsed.toFixed(2)}, target_elapsed=${targetRef.current.elapsed.toFixed(2)}, diff=${(stateRef.current.elapsed - targetRef.current.elapsed).toFixed(2)}`);
-            reconcileAuthoritativeState(stateRef.current, targetRef.current, playerId, dt);
-          }
-        }
+        if (!host) reconcileAuthoritativeState(stateRef.current, targetRef.current, playerId, dt);
       }
 
       if (game === "haxball" && mode === "online" && !host && playerId) {
@@ -220,19 +214,19 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
   const acceptTarget = useCallback((snapshot: GameSnapshot, hard = false) => {
     const current = targetRef.current;
-    const restarted = !current || snapshot.elapsed + 1 < current.elapsed;
-    const newer = !current || snapshot.revision > current.revision || snapshot.elapsed > current.elapsed + 0.08;
-
-    if (!hard && !restarted && !newer && snapshot.revision < targetRevisionRef.current) {
-      console.debug(`[Sync] Ignoring outdated snapshot: rev=${snapshot.revision}, targetRev=${targetRevisionRef.current}`);
-      return;
-    }
-
-    console.debug(`[Sync] Accepting snapshot: hard=${hard}, rev=${snapshot.revision}, elapsed=${snapshot.elapsed.toFixed(2)}`);
+    // Reiniciar a partida zera o relógio junto com a revisão: sem tratar isso,
+    // snapshots com revisão menor seriam rejeitados para sempre.
+    const restarted = !!current && snapshot.elapsed + 1 < current.elapsed;
+    if (!hard && !restarted && snapshot.revision < targetRevisionRef.current) return;
     targetRevisionRef.current = snapshot.revision;
     targetRef.current = snapshot;
 
-    if (hard || !hasAuthoritativeRef.current || newer) {
+    // A adoção dura (substituir a simulação local inteira) fica restrita ao
+    // primeiro snapshot, às reconexões e aos reinícios da partida. No fluxo
+    // normal o snapshot é apenas o ALVO da correção suave aplicada a cada
+    // frame: adotá-lo inteiro faria o convidado voltar no tempo a cada evento
+    // publicado pelo host (lag sentido por quem não criou a sala).
+    if (hard || restarted || !hasAuthoritativeRef.current) {
       stateRef.current = {
         ...snapshot,
         players: snapshot.players.map((actor) => ({ ...actor })),
@@ -249,9 +243,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     const startedAt = performance.now();
     try {
       const response = await fetch(`/api/games/rooms/${roomId}/state?game=${game}`, { cache: "no-store" });
-      const ping = Math.max(0, Math.round(performance.now() - startedAt));
-      setMetrics((prev) => ({ ...prev, ping }));
-      console.log(`[Network] Resync ping: ${ping}ms`);
+      pingRef.current = Math.max(0, Math.round(performance.now() - startedAt));
 
       if (response.status === 404) {
         onRoomUpdate(null);
@@ -265,8 +257,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
       const host = state.room.ownerId === playerId && !!ownerToken;
       if (!host && state.room.status === "playing" && state.snapshot) {
-        console.log(`[Sync] Received snapshot from host: rev=${state.snapshot.revision}, elapsed=${state.snapshot.elapsed.toFixed(2)}`);
-        acceptTarget(state.snapshot, hard || true);
+        // Reconexões (force) adotam o estado inteiro; o polling de fallback
+        // usa apenas o alvo suave, para não puxar o jogo de volta a cada leitura.
+        acceptTarget(state.snapshot, hard);
       }
 
       setNetworkError("");
@@ -293,8 +286,6 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       return;
     }
 
-    console.log(`[Realtime] Event received:`, event.type, event.name);
-
     const data = event.data;
     if (!isVersionedEvent(data)) {
       console.warn(`[Realtime] Unknown event version, requesting resync`);
@@ -307,15 +298,15 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     switch (event.name) {
       case "game-snapshot-updated":
+        // Alvo da reconciliação — nunca adoção dura. Substituir o estado local
+        // inteiro a cada snapshot faz o convidado enxergar uma posição de
+        // ~100–250 ms atrás (publicação + entrega) e sentir o jogo travando.
         if (!host && data.playerId !== playerId && currentRoom?.status === "playing" && data.snapshot) {
-          console.log(`[Realtime] Snapshot from ${data.playerId}: rev=${data.snapshot.revision}, elapsed=${data.snapshot.elapsed.toFixed(2)}`);
-          setMetrics((prev) => ({ ...prev, lastSnapshotTime: Date.now(), snapshotCount: prev.snapshotCount + 1 }));
-          acceptTarget(data.snapshot, true);
+          acceptTarget(data.snapshot);
         }
         break;
       case "game-input-updated":
         if (data.playerId && data.input) {
-          console.debug(`[Input] From ${data.playerId}: x=${data.input.x}, y=${data.input.y}`);
           remoteInputsRef.current[data.playerId] = data.input;
         }
         break;
@@ -323,7 +314,6 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       case "player-joined":
       case "player-left":
         if (data.room) {
-          console.log(`[Room] Event: ${event.name}, players=${data.room.players.length}`);
           roomRef.current = data.room;
           onRoomUpdate(data.room);
         } else {
@@ -369,7 +359,6 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         ];
 
         if (host && currentRoom?.status === "playing") {
-          console.debug(`[Host] Publishing snapshot: rev=${stateRef.current.revision}, elapsed=${stateRef.current.elapsed.toFixed(2)}`);
           requests.push(fetch(base, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -379,8 +368,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         }
 
         const responses = await Promise.all(requests);
-        const ping = Math.max(0, Math.round(performance.now() - startedAt));
-        setMetrics((prev) => ({ ...prev, ping }));
+        pingRef.current = Math.max(0, Math.round(performance.now() - startedAt));
 
         if (!active) return;
 
@@ -415,7 +403,6 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     const read = async () => {
       if (!active) return;
-      console.debug(`[Sync] Polling (fallback)`);
       const ok = await resync();
       if (active) timer = setTimeout(read, ok ? 200 : 1000);
     };
@@ -468,6 +455,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   };
 
   const time = `${String(Math.floor(hud.elapsed / 60)).padStart(2, "0")}:${String(Math.floor(hud.elapsed % 60)).padStart(2, "0")}`;
+  // Semáforo da conexão: verde estável, amarelo atento, vermelho ruim.
+  const pingTone = metrics.ping < 80 ? "ok" : metrics.ping < 180 ? "mid" : "bad";
+  const fpsTone = metrics.fps > 55 ? "ok" : metrics.fps > 35 ? "mid" : "bad";
   
   return (
     <div ref={boardRef} className="game-board-wrap">
@@ -479,42 +469,10 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       </div>
 
       <div className="game-canvas-shell">
-        {mode === "online" && (
-          <div style={{
-            position: "absolute",
-            top: 12,
-            right: 12,
-            display: "flex",
-            gap: 10,
-            zIndex: 999,
-            padding: "8px 12px",
-            border: "1px solid rgba(255,255,255,0.2)",
-            borderRadius: 8,
-            background: "rgba(0,0,0,0.7)",
-            backdropFilter: "blur(8px)",
-            fontFamily: "monospace",
-            fontSize: 11,
-            lineHeight: 1.4,
-            color: "rgba(255,255,255,0.9)",
-          }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              <span style={{ color: pingColor, display: "flex", alignItems: "center", gap: 4, fontWeight: 600 }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: pingColor, boxShadow: `0 0 8px ${pingColor}` }} />
-                PING {metrics.ping}ms
-              </span>
-              <span style={{ color: fpsColor, display: "flex", alignItems: "center", gap: 4, fontWeight: 600 }}>
-                <span style={{ width: 6, height: 6, borderRadius: "50%", background: fpsColor, boxShadow: `0 0 8px ${fpsColor}` }} />
-                FPS {metrics.fps}
-              </span>
-            </div>
-            {mode === "online" && !isHost && (
-              <div style={{ borderLeft: "1px solid rgba(255,255,255,0.2)", paddingLeft: 10, display: "flex", flexDirection: "column", gap: 3, fontSize: 10 }}>
-                <span>Snapshots: {metrics.snapshotCount}</span>
-                <span>Last: {metrics.lastSnapshotTime > 0 ? `${Date.now() - metrics.lastSnapshotTime}ms` : "—"}</span>
-              </div>
-            )}
-          </div>
-        )}
+        <div className="game-net-hud" role="status" aria-label="Desempenho e conexão">
+          {mode === "online" && <span className={`game-net-hud-${pingTone}`}><i aria-hidden="true" />ping {metrics.ping}ms</span>}
+          <span className={`game-net-hud-${fpsTone}`}><i aria-hidden="true" />fps {metrics.fps}</span>
+        </div>
 
         <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? " e o mouse para chutar" : ""}`} onPointerDown={onPointerDown} onPointerMove={updateAim} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} />
         {mode === "online" && room?.status === "waiting" && <div className="game-waiting">{isHost ? "Convide jogadores e clique em Iniciar partida." : "Aguardando o dono iniciar a partida."}</div>}
@@ -805,7 +763,7 @@ export function GameExperience({ game }: { game: GameId }) {
 
       <div className="game-notes">
         <div><Users size={19} /><span>{game === "haxball" ? "Até cinco por equipe nas salas online" : "Um jogador por equipe nas salas online"}</span></div>
-        <p>Abra o console (F12) para ver logs de sincronização. O host publica o estado a cada frame e os demais convergem via reconciliação.</p>
+        <p>Todos os jogadores preveem a partida localmente a 60 fps e convergem pelo estado autoritativo do criador da sala. O indicador no canto do campo mostra ping e FPS: verde estável, amarelo atento, vermelho instável.</p>
       </div>
     </main>
   );
