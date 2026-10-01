@@ -64,7 +64,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const pingRef = useRef(0);
   const fpsRef = useRef(60);
   const transportRef = useRef<RealtimeStatus>("idle");
-  const netStatsRef = useRef({ snapshots: 0, writes: 0, driftMs: 0, lastDiag: 0 });
+  const netStatsRef = useRef({ snapshots: 0, inputSends: 0, snapshotSends: 0, driftMs: 0, lastDiag: 0 });
+  const deliveryRef = useRef(0);
   
   const roomId = room?.id ?? null;
   const roomStatus = room?.status;
@@ -308,6 +309,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     switch (event.name) {
       case "game-snapshot-updated":
+        if (typeof data.sentAt === "number") deliveryRef.current = Date.now() - data.sentAt;
         // Alvo da reconciliação — nunca adoção dura. Substituir o estado local
         // inteiro a cada snapshot faz o convidado enxergar uma posição de
         // ~100–250 ms atrás (publicação + entrega) e sentir o jogo travando.
@@ -317,6 +319,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         }
         break;
       case "game-input-updated":
+        if (typeof data.sentAt === "number") deliveryRef.current = Date.now() - data.sentAt;
         if (data.playerId && data.input) {
           remoteInputsRef.current[data.playerId] = data.input;
         }
@@ -358,73 +361,81 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     if (mode !== "online" || !roomId || !playerId) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+    let inputInFlight = 0;
+    let snapshotInFlight = 0;
+    let lastInputJson: string | null = null;
+    // Cadência fixa de 50ms, independente da latência. Cada requisição leva o
+    // estado mais recente e a próxima sai 50ms depois, mesmo com a anterior em
+    // voo — antes, esperar a resposta (300–400ms em serverless) limitava o
+    // fluxo inteiro a ~2 envios por segundo, que era o lag sentido por todos.
+    const TICK_MS = 50;
+    const MAX_IN_FLIGHT = 3;
 
-    const write = async () => {
-      let nextDelay = 50;
+    const post = (payload: unknown) => {
       const startedAt = performance.now();
-      const stats = netStatsRef.current;
-      stats.writes += 1;
-      // Resumo de rede a cada ~2s: transporte, latência, taxas e atraso de sync.
-      if (stats.lastDiag === 0) stats.lastDiag = startedAt;
-      const diagWindow = startedAt - stats.lastDiag;
-      if (diagWindow >= 2000) {
-        const via = transportRef.current === "connected" ? "ably" : `http (${transportRef.current})`;
-        const isHostNow = roomRef.current?.ownerId === playerId && !!ownerToken;
-        console.info(`[Net] sala=${roomId} via=${via} ping=${pingRef.current}ms fps=${Math.round(fpsRef.current)} snapshots=${Math.round((stats.snapshots * 1000) / diagWindow)}/s escritas=${Math.round((stats.writes * 1000) / diagWindow)}/s atraso=${stats.driftMs}ms host=${isHostNow ? "sim" : "não"}`);
-        stats.snapshots = 0;
-        stats.writes = 0;
-        stats.lastDiag = startedAt;
-      }
-
-      try {
-        const base = `/api/games/rooms/${roomId}/state`;
-        const currentRoom = roomRef.current;
-        const host = currentRoom?.ownerId === playerId && !!ownerToken;
-
-        const requests: Promise<Response>[] = [
-          fetch(base, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ game, playerId, action: "input", input: inputRef.current }),
-            cache: "no-store",
-          }),
-        ];
-
-        if (host && currentRoom?.status === "playing") {
-          requests.push(fetch(base, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current }),
-            cache: "no-store",
-          }));
+      return fetch(`/api/games/rooms/${roomId}/state`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        cache: "no-store",
+      }).then((response) => {
+        // Ping = RTT da escrita (servidor + Redis), suavizado para o HUD.
+        const sample = Math.max(0, Math.round(performance.now() - startedAt));
+        pingRef.current = Math.round(pingRef.current ? pingRef.current * 0.6 + sample * 0.4 : sample);
+        if (response.status === 404) {
+          active = false;
+          onRoomUpdate(null);
+          return;
         }
-
-        const responses = await Promise.all(requests);
-        pingRef.current = Math.max(0, Math.round(performance.now() - startedAt));
-
-        if (!active) return;
-
-        for (const response of responses) {
-          if (response.status === 404) {
-            console.error(`[Network] Room not found`);
-            active = false;
-            onRoomUpdate(null);
-            return;
-          }
-          if (!response.ok) throw new Error("Conexão com a partida interrompida.");
-        }
-
-        setNetworkError("");
-      } catch (error) {
-        nextDelay = 500;
-        console.error(`[Network] Write failed:`, error);
+        if (!response.ok) throw new Error("Conexão com a partida interrompida.");
+        if (active) setNetworkError("");
+      }).catch((error: unknown) => {
+        console.error(`[Network] Falha na escrita:`, error);
         if (active) setNetworkError(error instanceof Error ? error.message : "Conexão indisponível.");
-      } finally {
-        if (active) timer = setTimeout(write, nextDelay);
-      }
+      });
     };
 
-    void write();
+    const tick = () => {
+      if (!active) return;
+      const now = performance.now();
+      const currentRoom = roomRef.current;
+      const host = currentRoom?.ownerId === playerId && !!ownerToken;
+      const stats = netStatsRef.current;
+
+      // Input: só sai quando muda de fato (virar, correr, carregar o chute),
+      // o que elimina o tráfego de um jogador parado.
+      const inputJson = JSON.stringify(inputRef.current);
+      if (inputInFlight < MAX_IN_FLIGHT && inputJson !== lastInputJson) {
+        inputInFlight += 1;
+        lastInputJson = inputJson;
+        stats.inputSends += 1;
+        void post({ game, playerId, action: "input", input: inputRef.current }).finally(() => { inputInFlight -= 1; });
+      }
+
+      // Snapshot: o host publica o estado autoritativo no mesmo ritmo; envios
+      // intermediários são descartados, porque o próximo carrega o estado novo.
+      if (host && currentRoom?.status === "playing" && snapshotInFlight < MAX_IN_FLIGHT) {
+        snapshotInFlight += 1;
+        stats.snapshotSends += 1;
+        void post({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current }).finally(() => { snapshotInFlight -= 1; });
+      }
+
+      // Resumo de rede a cada ~2s: escrita, entrega Ably, taxas e atraso de sync.
+      if (stats.lastDiag === 0) stats.lastDiag = now;
+      const diagWindow = now - stats.lastDiag;
+      if (diagWindow >= 2000) {
+        const via = transportRef.current === "connected" ? "ably" : `http (${transportRef.current})`;
+        console.info(`[Net] sala=${roomId} via=${via} post=${pingRef.current}ms entrega=${deliveryRef.current}ms fps=${Math.round(fpsRef.current)} inputs=${Math.round((stats.inputSends * 1000) / diagWindow)}/s publicados=${Math.round((stats.snapshotSends * 1000) / diagWindow)}/s recebidos=${Math.round((stats.snapshots * 1000) / diagWindow)}/s atraso=${stats.driftMs}ms host=${host ? "sim" : "não"}`);
+        stats.inputSends = 0;
+        stats.snapshotSends = 0;
+        stats.snapshots = 0;
+        stats.lastDiag = now;
+      }
+
+      timer = setTimeout(tick, TICK_MS);
+    };
+
+    tick();
     return () => { active = false; clearTimeout(timer); };
   }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate]);
 
@@ -479,13 +490,6 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     }
   };
 
-  const reset = () => {
-    if (mode === "bot") stateRef.current = createBotGame(game, bots);
-    else if (isHost && roomRef.current) stateRef.current = createOnlineGame(game, roomRef.current.players);
-    lastKicksRef.current = {};
-    setGoalNotice(null);
-  };
-
   const time = `${String(Math.floor(hud.elapsed / 60)).padStart(2, "0")}:${String(Math.floor(hud.elapsed % 60)).padStart(2, "0")}`;
   // Semáforo da conexão: verde estável, amarelo atento, vermelho ruim.
   const pingTone = metrics.ping < 80 ? "ok" : metrics.ping < 180 ? "mid" : "bad";
@@ -502,6 +506,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
       <div className="game-canvas-shell">
         <div className="game-net-hud" role="status" aria-label="Desempenho e conexão">
+          {mode === "online" && <span className="game-net-hud-mode">{realtimeStatus === "idle" ? "Preparando sala…" : connLabels[realtimeStatus]}</span>}
           {mode === "online" && <span className={`game-net-hud-${pingTone}`}><i aria-hidden="true" />ping {metrics.ping}ms</span>}
           <span className={`game-net-hud-${fpsTone}`}><i aria-hidden="true" />fps {metrics.fps}</span>
         </div>
@@ -709,6 +714,12 @@ export function GameExperience({ game }: { game: GameId }) {
                 <div className="game-online-controls">
                   <label>Seu nome
                     <input value={name} maxLength={20} onChange={(event) => setName(event.target.value)} placeholder="Nome" onKeyDown={(event) => { if (event.key === "Enter" && !busy && name.trim().length >= 2) void createRoom(); }} />
+                  </label>
+                  <label>Equipe ao entrar
+                    <select value={team} onChange={(event) => setTeam(event.target.value as GameTeam)}>
+                      <option value="blue">Branca</option>
+                      <option value="orange">Laranja</option>
+                    </select>
                   </label>
                   <button type="button" className="game-primary-button" disabled={busy || name.trim().length < 2} onClick={() => void createRoom()}>Criar sala <ArrowRight size={15} /></button>
                 </div>

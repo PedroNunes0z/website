@@ -460,6 +460,7 @@ img { max-width: 100%; }
 .game-net-hud span { display: inline-flex; align-items: center; gap: .45rem; font-variant-numeric: tabular-nums; }
 .game-net-hud i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 .game-net-hud-ok { color: #7ddba3; }
+.game-net-hud-mode { color: var(--muted); }
 .game-net-hud-mid { color: #f0b45c; }
 .game-net-hud-bad { color: #ff7262; }
 .game-goal-overlay { position: absolute; top: 50%; left: 50%; z-index: 2; min-width: min(420px, 86%); padding: 1.5rem 2.5rem; display: flex; flex-direction: column; align-items: center; gap: .25rem; border: 1px solid var(--orange); background: rgba(8, 8, 8, .94); box-shadow: 0 0 70px rgba(255, 141, 79, .24); color: var(--white); text-align: center; transform: translate(-50%, -50%); pointer-events: none; animation: game-goal-appear 420ms ease-out both; }

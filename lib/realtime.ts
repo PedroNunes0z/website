@@ -42,6 +42,12 @@ export interface RoomEventData {
   reason?: string;
   snapshot?: GameSnapshot;
   input?: GameInput;
+  /**
+   * Momento em que o servidor recebeu a escrita que gerou este evento. O
+   * cliente mede `Date.now() - sentAt` para separar a latência do caminho
+   * servidor→Ably→cliente da latência da escrita HTTP do próprio cliente.
+   */
+  sentAt?: number;
 }
 
 /** Tudo que o hook de tempo real entrega ao consumidor. */

@@ -1,7 +1,7 @@
 import { getRedis } from "@/lib/redis";
 import type { GameId } from "@/lib/games";
 import { getGameRoomState, heartbeatGameRoom, publishGameSnapshot } from "@/lib/games";
-import { stepGame, reconcileAuthoritativeState } from "@/lib/game-engine";
+import { stepGame } from "@/lib/game-engine";
 import type { GameInput, GameSnapshot } from "@/lib/game-engine";
 
 interface SyncRequest {

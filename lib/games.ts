@@ -96,6 +96,38 @@ export async function publishGameSnapshot(game: GameId, id: string, playerId: st
   await redis.set(snapshotKey(id), snapshot, { ex: ROOM_TTL_SECONDS });
 }
 
+/**
+ * Valida a escrita e devolve a persistência como callback.
+ *
+ * A resposta HTTP volta assim que a sala (e o dono, no caso do snapshot) são
+ * conferidos, e a gravação no Redis roda depois dela — no caminho crítico fica
+ * só uma ida ao Redis, com as leituras em paralelo. Como o Redis alimenta o
+ * fallback por polling, alguns milissegundos de defasagem são irrelevantes; o
+ * que não pode atrasar é a notificação de tempo real.
+ */
+export async function acceptGameInput(game: GameId, id: string, playerId: string, input: GameInput) {
+  const redis = getRedis();
+  if (!redis) throw new Error("STORAGE_NOT_CONFIGURED");
+  const room = await getGameRoom(game, id);
+  if (!room.players.some((player) => player.id === playerId)) throw new Error("NOT_FOUND");
+  return async () => {
+    await Promise.all([
+      redis.hset(inputsKey(id), { [playerId]: input }),
+      redis.expire(inputsKey(id), ROOM_TTL_SECONDS),
+    ]);
+  };
+}
+
+export async function acceptGameSnapshot(game: GameId, id: string, playerId: string, ownerToken: string, snapshot: GameSnapshot) {
+  const redis = getRedis();
+  if (!redis) throw new Error("STORAGE_NOT_CONFIGURED");
+  const [room, token] = await Promise.all([getGameRoom(game, id), redis.get<string>(ownerTokenKey(id))]);
+  if (room.ownerId !== playerId || room.status !== "playing" || snapshot.game !== game || token !== ownerToken) throw new Error("NOT_HOST");
+  return async () => {
+    await redis.set(snapshotKey(id), snapshot, { ex: ROOM_TTL_SECONDS });
+  };
+}
+
 export async function createGameRoom(game: GameId, name: string) {
   const redis = getRedis();
   if (!redis) throw new Error("STORAGE_NOT_CONFIGURED");
