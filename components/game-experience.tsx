@@ -55,13 +55,19 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const lastGoalCountRef = useRef(0);
   const hudScoreRef = useRef({ blue: 0, orange: 0 });
   const goalUntilRef = useRef(0);
+  
   const [hud, setHud] = useState({ blue: 0, orange: 0, elapsed: 0, winner: null as GameTeam | null });
   const [goalNotice, setGoalNotice] = useState<{ team: GameTeam; blue: number; orange: number; id: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [networkError, setNetworkError] = useState("");
+  const [metrics, setMetrics] = useState({ ping: 0, fps: 60, lastSnapshotTime: 0, snapshotCount: 0 });
+  
   const roomId = room?.id ?? null;
   const roomStatus = room?.status;
   const isHost = mode === "online" && room?.ownerId === playerId && !!ownerToken;
+
+  const pingColor = metrics.ping < 80 ? "#4ade80" : metrics.ping < 180 ? "#facc15" : "#f87171";
+  const fpsColor = metrics.fps > 55 ? "#4ade80" : metrics.fps > 35 ? "#facc15" : "#f87171";
 
   useEffect(() => { roomRef.current = room; }, [room]);
 
@@ -115,18 +121,32 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     let frame = 0;
     let lastTime = performance.now();
     let hudTime = lastTime;
+    let fpsFrames = 0;
+    let fpsWindowStart = lastTime;
+
     const resize = () => {
       const bounds = canvas.getBoundingClientRect();
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       canvas.width = Math.max(1, Math.round(bounds.width * dpr));
       canvas.height = Math.max(1, Math.round(bounds.height * dpr));
     };
+
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
     resize();
+
     const run = (now: number) => {
       const dt = Math.min((now - lastTime) / 1000, 0.05);
       lastTime = now;
+      fpsFrames += 1;
+
+      if (now - fpsWindowStart >= 500) {
+        const fps = (fpsFrames * 1000) / (now - fpsWindowStart);
+        setMetrics((prev) => ({ ...prev, fps: Math.round(fps) }));
+        fpsFrames = 0;
+        fpsWindowStart = now;
+      }
+
       const keys = keysRef.current;
       inputRef.current.x = Number(keys.has("KeyD") || keys.has("ArrowRight")) - Number(keys.has("KeyA") || keys.has("ArrowLeft"));
       inputRef.current.y = Number(keys.has("KeyS") || keys.has("ArrowDown")) - Number(keys.has("KeyW") || keys.has("ArrowUp"));
@@ -136,16 +156,20 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
       const currentRoom = roomRef.current;
       const host = mode === "online" && currentRoom?.ownerId === playerId && !!ownerToken;
+
       if (mode === "bot") {
         stepGame(stateRef.current, { local: inputRef.current }, lastKicksRef.current, dt);
       } else if (mode === "online" && playerId && currentRoom?.status === "playing") {
-        // O convidado também simula: responde ao próprio input no mesmo frame e
-        // mantém os pawns remotos em movimento contínuo entre snapshots. O host
-        // continua sendo a fonte da verdade — a reconciliação corrige a deriva.
         if (host) updateOnlineRoster(stateRef.current, currentRoom.players);
         stepGame(stateRef.current, { ...remoteInputsRef.current, [playerId]: inputRef.current }, lastKicksRef.current, dt, { authoritative: host });
-        if (!host) reconcileAuthoritativeState(stateRef.current, targetRef.current, playerId, dt);
+        if (!host) {
+          if (targetRef.current) {
+            console.debug(`[Game] Guest reconcile: local_elapsed=${stateRef.current.elapsed.toFixed(2)}, target_elapsed=${targetRef.current.elapsed.toFixed(2)}, diff=${(stateRef.current.elapsed - targetRef.current.elapsed).toFixed(2)}`);
+            reconcileAuthoritativeState(stateRef.current, targetRef.current, playerId, dt);
+          }
+        }
       }
+
       if (game === "haxball" && mode === "online" && !host && playerId) {
         const localActor = stateRef.current.players.find((actor) => actor.id === playerId);
         if (localActor) {
@@ -155,7 +179,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
           localActor.aimY = inputRef.current.aimY;
         }
       }
+
       drawGame(ctx, stateRef.current, mode === "bot" ? "local" : (playerId ?? ""));
+
       const scores = stateRef.current.score;
       const totalGoals = scores.blue + scores.orange;
       if (totalGoals < lastGoalCountRef.current) {
@@ -171,60 +197,82 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         }
       }
       hudScoreRef.current = { blue: scores.blue, orange: scores.orange };
+
       if (goalUntilRef.current > 0 && now >= goalUntilRef.current) {
         goalUntilRef.current = 0;
         setGoalNotice(null);
       }
+
       if (now - hudTime > 180) {
         const state = stateRef.current;
         setHud({ blue: state.score.blue, orange: state.score.orange, elapsed: state.elapsed, winner: state.winner });
         hudTime = now;
       }
+
       frame = requestAnimationFrame(run);
     };
+
     frame = requestAnimationFrame(run);
     return () => { cancelAnimationFrame(frame); observer.disconnect(); };
   }, [game, mode, playerId, ownerToken]);
 
   const lastResyncRef = useRef(0);
 
-  // Guarda o snapshot autoritativo como *alvo* da reconciliação. A adoção dura
-  // (substituir a simulação local inteira) fica restrita ao primeiro snapshot e
-  // às reconexões, quando eventos podem ter se perdido; no fluxo normal o alvo
-  // apenas alimenta a correção suave aplicada a cada frame.
   const acceptTarget = useCallback((snapshot: GameSnapshot, hard = false) => {
     const current = targetRef.current;
-    // Reiniciar a partida zera o relógio junto com a revisão: sem tratar isso,
-    // snapshots com revisão menor seriam rejeitados para sempre.
     const restarted = !current || snapshot.elapsed + 1 < current.elapsed;
-    if (!hard && !restarted && snapshot.revision < targetRevisionRef.current) return;
+    const newer = !current || snapshot.revision > current.revision || snapshot.elapsed > current.elapsed + 0.08;
+
+    if (!hard && !restarted && !newer && snapshot.revision < targetRevisionRef.current) {
+      console.debug(`[Sync] Ignoring outdated snapshot: rev=${snapshot.revision}, targetRev=${targetRevisionRef.current}`);
+      return;
+    }
+
+    console.debug(`[Sync] Accepting snapshot: hard=${hard}, rev=${snapshot.revision}, elapsed=${snapshot.elapsed.toFixed(2)}`);
     targetRevisionRef.current = snapshot.revision;
     targetRef.current = snapshot;
-    if (hard || !hasAuthoritativeRef.current) {
-      stateRef.current = snapshot;
+
+    if (hard || !hasAuthoritativeRef.current || newer) {
+      stateRef.current = {
+        ...snapshot,
+        players: snapshot.players.map((actor) => ({ ...actor })),
+        ball: { ...snapshot.ball },
+        score: { ...snapshot.score },
+      };
       hasAuthoritativeRef.current = true;
     }
   }, []);
 
-  // Sincronização autoritativa via API: na entrada na sala, após reconexões e
-  // de forma periódica quando o tempo real não está ativo (fallback HTTP).
   const resync = useCallback(async (hard = false): Promise<boolean> => {
     if (mode !== "online" || !roomId || !playerId) return false;
+
+    const startedAt = performance.now();
     try {
       const response = await fetch(`/api/games/rooms/${roomId}/state?game=${game}`, { cache: "no-store" });
+      const ping = Math.max(0, Math.round(performance.now() - startedAt));
+      setMetrics((prev) => ({ ...prev, ping }));
+      console.log(`[Network] Resync ping: ${ping}ms`);
+
       if (response.status === 404) {
         onRoomUpdate(null);
         return false;
       }
+
       const state = await readResponse<{ room: GameRoom; snapshot: GameSnapshot | null; inputs: Record<string, GameInput> }>(response);
       roomRef.current = state.room;
       onRoomUpdate(state.room);
       remoteInputsRef.current = state.inputs;
+
       const host = state.room.ownerId === playerId && !!ownerToken;
-      if (!host && state.room.status === "playing" && state.snapshot) acceptTarget(state.snapshot, hard);
+      if (!host && state.room.status === "playing" && state.snapshot) {
+        console.log(`[Sync] Received snapshot from host: rev=${state.snapshot.revision}, elapsed=${state.snapshot.elapsed.toFixed(2)}`);
+        acceptTarget(state.snapshot, hard || true);
+      }
+
       setNetworkError("");
       return true;
     } catch (error) {
+      console.error(`[Network] Resync failed:`, error);
       setNetworkError(error instanceof Error ? error.message : "Conexão indisponível.");
       return false;
     }
@@ -232,36 +280,50 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
   const requestResync = useCallback((force = false) => {
     const now = Date.now();
-    // Evita rajadas de ressincronização quando vários eventos chegam juntos.
     if (!force && now - lastResyncRef.current < 1500) return;
     lastResyncRef.current = now;
+    console.log(`[Sync] Requesting resync (force=${force})`);
     void resync(force);
   }, [resync]);
 
   const handleRealtimeEvent = useCallback((event: RealtimeClientEvent) => {
+    console.log(`[Realtime] Event received:`, event.type, event.name);
+
     if (event.type === "resync") {
+      console.log(`[Realtime] Resync triggered:`, event.reason);
       requestResync(true);
       return;
     }
+
     const data = event.data;
-    // Versão desconhecida: ignora o payload e ressincroniza pela API.
     if (!isVersionedEvent(data)) {
+      console.warn(`[Realtime] Unknown event version, requesting resync`);
       requestResync();
       return;
     }
+
     const currentRoom = roomRef.current;
     const host = currentRoom?.ownerId === playerId && !!ownerToken;
+
     switch (event.name) {
       case "game-snapshot-updated":
-        if (!host && data.playerId !== playerId && currentRoom?.status === "playing" && data.snapshot) acceptTarget(data.snapshot);
+        if (!host && data.playerId !== playerId && currentRoom?.status === "playing" && data.snapshot) {
+          console.log(`[Realtime] Snapshot from ${data.playerId}: rev=${data.snapshot.revision}, elapsed=${data.snapshot.elapsed.toFixed(2)}`);
+          setMetrics((prev) => ({ ...prev, lastSnapshotTime: Date.now(), snapshotCount: prev.snapshotCount + 1 }));
+          acceptTarget(data.snapshot, true);
+        }
         break;
       case "game-input-updated":
-        if (data.playerId && data.input) remoteInputsRef.current[data.playerId] = data.input;
+        if (data.playerId && data.input) {
+          console.debug(`[Input] From ${data.playerId}: x=${data.input.x}, y=${data.input.y}`);
+          remoteInputsRef.current[data.playerId] = data.input;
+        }
         break;
       case "game-state-updated":
       case "player-joined":
       case "player-left":
         if (data.room) {
+          console.log(`[Room] Event: ${event.name}, players=${data.room.players.length}`);
           roomRef.current = data.room;
           onRoomUpdate(data.room);
         } else {
@@ -269,6 +331,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         }
         break;
       case "game-ended":
+        console.log(`[Room] Game ended`);
         onRoomUpdate(null);
         break;
     }
@@ -282,55 +345,81 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   });
   const realtimeLive = realtimeStatus === "connected";
 
-  // Escritas: sempre via HTTP, validadas e persistidas pelo servidor, que as
-  // republica no Ably. Funciona com ou sem tempo real ativo.
   useEffect(() => {
     if (mode !== "online" || !roomId || !playerId) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+
     const write = async () => {
-      let nextDelay = 80;
+      let nextDelay = 50;
+      const startedAt = performance.now();
+
       try {
         const base = `/api/games/rooms/${roomId}/state`;
         const currentRoom = roomRef.current;
         const host = currentRoom?.ownerId === playerId && !!ownerToken;
+
         const requests: Promise<Response>[] = [
-          fetch(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId, action: "input", input: inputRef.current }), cache: "no-store" }),
+          fetch(base, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game, playerId, action: "input", input: inputRef.current }),
+            cache: "no-store",
+          }),
         ];
-        if (host && currentRoom?.status === "playing") requests.push(fetch(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current }), cache: "no-store" }));
+
+        if (host && currentRoom?.status === "playing") {
+          console.debug(`[Host] Publishing snapshot: rev=${stateRef.current.revision}, elapsed=${stateRef.current.elapsed.toFixed(2)}`);
+          requests.push(fetch(base, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current }),
+            cache: "no-store",
+          }));
+        }
+
         const responses = await Promise.all(requests);
+        const ping = Math.max(0, Math.round(performance.now() - startedAt));
+        setMetrics((prev) => ({ ...prev, ping }));
+
         if (!active) return;
+
         for (const response of responses) {
           if (response.status === 404) {
+            console.error(`[Network] Room not found`);
             active = false;
             onRoomUpdate(null);
             return;
           }
           if (!response.ok) throw new Error("Conexão com a partida interrompida.");
         }
+
         setNetworkError("");
       } catch (error) {
-        nextDelay = 1000;
+        nextDelay = 500;
+        console.error(`[Network] Write failed:`, error);
         if (active) setNetworkError(error instanceof Error ? error.message : "Conexão indisponível.");
       } finally {
         if (active) timer = setTimeout(write, nextDelay);
       }
     };
+
     void write();
     return () => { active = false; clearTimeout(timer); };
   }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate]);
 
-  // Leituras por polling: ativas somente quando o tempo real não está
-  // conectado (fallback ou reconectando). Quando o Ably volta, o polling para.
   useEffect(() => {
     if (mode !== "online" || !roomId || !playerId || realtimeLive) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+
     const read = async () => {
       if (!active) return;
+      console.debug(`[Sync] Polling (fallback)`);
       const ok = await resync();
-      if (active) timer = setTimeout(read, ok ? 80 : 1000);
+      if (active) timer = setTimeout(read, ok ? 200 : 1000);
     };
+
     void read();
     return () => { active = false; clearTimeout(timer); };
   }, [game, mode, roomId, playerId, realtimeLive, resync]);
@@ -342,6 +431,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     inputRef.current.aimX = aim.x;
     inputRef.current.aimY = aim.y;
   };
+
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     event.currentTarget.focus();
     if (game !== "haxball" || event.button !== 0) return;
@@ -351,6 +441,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     inputRef.current.power = 0;
     updateAim(event);
   };
+
   const onPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (game !== "haxball" || !inputRef.current.charging) return;
     updateAim(event);
@@ -377,22 +468,66 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   };
 
   const time = `${String(Math.floor(hud.elapsed / 60)).padStart(2, "0")}:${String(Math.floor(hud.elapsed % 60)).padStart(2, "0")}`;
-  return <div ref={boardRef} className="game-board-wrap">
-    <div className="game-board-hud">
-      <div><span className="score-dot white" /> Branco <strong>{hud.blue}</strong></div>
-      <span className="game-timer">{time}</span>
-      <div><strong>{hud.orange}</strong> Laranja <span className="score-dot orange" /></div>
-      <button type="button" className="game-fullscreen-button" onClick={() => void toggleFullscreen()} aria-label={isFullscreen ? "Sair da tela cheia" : "Colocar jogo em tela cheia"} title={isFullscreen ? "Sair da tela cheia" : "Tela cheia"}>{isFullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}</button>
+  
+  return (
+    <div ref={boardRef} className="game-board-wrap">
+      <div className="game-board-hud">
+        <div><span className="score-dot white" /> Branco <strong>{hud.blue}</strong></div>
+        <span className="game-timer">{time}</span>
+        <div><strong>{hud.orange}</strong> Laranja <span className="score-dot orange" /></div>
+        <button type="button" className="game-fullscreen-button" onClick={() => void toggleFullscreen()} aria-label={isFullscreen ? "Sair da tela cheia" : "Colocar jogo em tela cheia"} title={isFullscreen ? "Sair da tela cheia" : "Colocar jogo em tela cheia"}>{isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
+      </div>
+
+      <div className="game-canvas-shell">
+        {mode === "online" && (
+          <div style={{
+            position: "absolute",
+            top: 12,
+            right: 12,
+            display: "flex",
+            gap: 10,
+            zIndex: 999,
+            padding: "8px 12px",
+            border: "1px solid rgba(255,255,255,0.2)",
+            borderRadius: 8,
+            background: "rgba(0,0,0,0.7)",
+            backdropFilter: "blur(8px)",
+            fontFamily: "monospace",
+            fontSize: 11,
+            lineHeight: 1.4,
+            color: "rgba(255,255,255,0.9)",
+          }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              <span style={{ color: pingColor, display: "flex", alignItems: "center", gap: 4, fontWeight: 600 }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: pingColor, boxShadow: `0 0 8px ${pingColor}` }} />
+                PING {metrics.ping}ms
+              </span>
+              <span style={{ color: fpsColor, display: "flex", alignItems: "center", gap: 4, fontWeight: 600 }}>
+                <span style={{ width: 6, height: 6, borderRadius: "50%", background: fpsColor, boxShadow: `0 0 8px ${fpsColor}` }} />
+                FPS {metrics.fps}
+              </span>
+            </div>
+            {mode === "online" && !isHost && (
+              <div style={{ borderLeft: "1px solid rgba(255,255,255,0.2)", paddingLeft: 10, display: "flex", flexDirection: "column", gap: 3, fontSize: 10 }}>
+                <span>Snapshots: {metrics.snapshotCount}</span>
+                <span>Last: {metrics.lastSnapshotTime > 0 ? `${Date.now() - metrics.lastSnapshotTime}ms` : "—"}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? " e o mouse para chutar" : ""}`} onPointerDown={onPointerDown} onPointerMove={updateAim} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} />
+        {mode === "online" && room?.status === "waiting" && <div className="game-waiting">{isHost ? "Convide jogadores e clique em Iniciar partida." : "Aguardando o dono iniciar a partida."}</div>}
+        {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong>{goalNotice.blue} <i>—</i> {goalNotice.orange}</strong><small>Equipe {goalNotice.team === "blue" ? "branca" : "laranja"}</small></div>}
+        {hud.winner && !goalNotice && <div className="game-waiting">Equipe {hud.winner === "blue" ? "branca" : "laranja"} venceu.</div>}
+      </div>
+
+      <div className="game-board-footer">
+        <span>WASD ou setas: mover {game === "haxball" ? " · Segure o clique: chute · Shift: correr · F: curva · Q: dash para o cursor" : " · Empurre o disco para marcar gols"}</span>
+        {networkError && <p className="game-error" role="status">{networkError}</p>}
+      </div>
     </div>
-    <div className="game-canvas-shell">
-      <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? " e o mouse para chutar" : ""}`} onPointerDown={onPointerDown} onPointerMove={updateAim} onPointerEnter={updateAim} onPointerUp={onPointerUp} onPointerCancel={() => { inputRef.current.charging = false; }} onContextMenu={(event) => event.preventDefault()} />
-      {mode === "online" && room?.status === "waiting" && <div className="game-waiting">{isHost ? "Convide jogadores e clique em Iniciar partida." : "Aguardando o dono iniciar a partida."}</div>}
-      {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong>{goalNotice.blue} <i>—</i> {goalNotice.orange}</strong><small>Equipe {goalNotice.team === "blue" ? "branca" : "laranja"} marcou</small></div>}
-      {hud.winner && !goalNotice && <div className="game-waiting">Equipe {hud.winner === "blue" ? "branca" : "laranja"} venceu.</div>}
-    </div>
-    <div className="game-board-footer"><span>WASD ou setas: mover {game === "haxball" ? " · Segure o clique: chute · Shift: correr · F: curva · Q: dash para o cursor" : " · Empurre o disco para marcar"}</span><span className="game-board-footer-right">{mode === "online" && realtimeStatus !== "idle" && <span className={`game-conn game-conn-${realtimeStatus}`} role="status" aria-live="polite"><span className="game-conn-dot" aria-hidden="true" />{connLabels[realtimeStatus]}</span>}{(mode === "bot" || isHost) && <button type="button" onClick={reset}><RefreshCcw size={15} /> Reiniciar</button>}</span></div>
-    {networkError && <p className="game-error" role="status">{networkError}</p>}
-  </div>;
+  );
 }
 
 export function GameExperience({ game }: { game: GameId }) {
@@ -412,14 +547,16 @@ export function GameExperience({ game }: { game: GameId }) {
     const requested = new URLSearchParams(window.location.search).get("room")?.toUpperCase() ?? "";
     if (!/^[A-Z0-9]{8}$/.test(requested)) return;
     const timer = setTimeout(async () => {
+      console.log(`[Game] Auto-joining room: ${requested}`);
       setMode("online");
       setRoomCode(requested);
       const saved = sessionStorage.getItem(`pedro-games:${game}:${requested}`);
       if (!saved) return;
       try {
         const { playerId: savedId, ownerToken: savedToken } = JSON.parse(saved) as { playerId: string; ownerToken?: string };
-        const response = await fetch(`/api/games/rooms/${requested}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId: savedId, action: "heartbeat" }) });
+        const response = await fetch(`/api/games/rooms/${requested}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId: savedId, action: "join" }) });
         const data = await readResponse<RoomResponse>(response);
+        console.log(`[Game] Rejoined room, isHost=${!!(savedToken)}`);
         setPlayerId(savedId);
         setOwnerToken(savedToken ?? null);
         setRoom(data.room);
@@ -470,6 +607,7 @@ export function GameExperience({ game }: { game: GameId }) {
       sessionStorage.setItem("pedro-games-name", name.trim());
       const response = await fetch("/api/games/rooms", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, name: name.trim() }) });
       const data = await readResponse<RoomResponse>(response);
+      console.log(`[Game] Room created: ${data.room.id}, isHost=true`);
       setRoom(data.room); setPlayerId(data.playerId ?? null); setOwnerToken(data.ownerToken ?? null);
       if (data.playerId) sessionStorage.setItem(`pedro-games:${game}:${data.room.id}`, JSON.stringify({ playerId: data.playerId, ownerToken: data.ownerToken }));
       window.history.replaceState({}, "", `/games/${game}?room=${data.room.id}`);
@@ -483,8 +621,9 @@ export function GameExperience({ game }: { game: GameId }) {
     try {
       sessionStorage.setItem("pedro-games-name", name.trim());
       const freshId = crypto.randomUUID();
-      const response = await fetch(`/api/games/rooms/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, name: name.trim(), playerId: freshId, team, action: "join" }) });
+      const response = await fetch(`/api/games/rooms/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, name: name.trim(), playerId: freshId, action: "join", team }) });
       const data = await readResponse<RoomResponse>(response);
+      console.log(`[Game] Joined room: ${id}, isHost=false`);
       setRoom(data.room); setPlayerId(data.player?.id ?? freshId); setOwnerToken(null);
       sessionStorage.setItem(`pedro-games:${game}:${data.room.id}`, JSON.stringify({ playerId: data.player?.id ?? freshId }));
       window.history.replaceState({}, "", `/games/${game}?room=${data.room.id}`);
@@ -507,6 +646,7 @@ export function GameExperience({ game }: { game: GameId }) {
     try {
       const response = await fetch(`/api/games/rooms/${room.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId, ownerToken, action: "start" }) });
       const data = await readResponse<RoomResponse>(response);
+      console.log(`[Game] Room started, players=${data.room.players.length}`);
       setRoom(data.room);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível iniciar a partida."); }
     finally { setBusy(false); }
@@ -521,34 +661,152 @@ export function GameExperience({ game }: { game: GameId }) {
       window.history.replaceState({}, "", `/games/${game}`);
     }
   }, [game]);
+
   const max = game === "haxball" ? 5 : 1;
-  return <main className="game-experience shell">
-    <div className="game-crumb"><Link href="/games"><ArrowLeft size={15} /> Todos os jogos</Link><span>/</span><span>{labels[game]}</span></div>
-    <div className="game-page-heading"><div><p className="eyebrow"><span /> Playground / {game === "haxball" ? "01" : "02"}</p><h1>{labels[game]}<span>.</span></h1><p>{descriptions[game]}</p></div><span className="game-tag">Canvas 2D / Multiplayer</span></div>
-    <div className="game-mode-switch" role="tablist" aria-label="Modo de jogo">
-      <button role="tab" aria-selected={mode === "bot"} className={mode === "bot" ? "active" : ""} onClick={() => { if (room) void leaveRoom(); setMode("bot"); setError(""); }}>Versus bot</button>
-      <button role="tab" aria-selected={mode === "online"} className={mode === "online" ? "active" : ""} onClick={() => { setMode("online"); setError(""); }}>Salas online</button>
-    </div>
-    {mode === "bot" ? <div className="game-setup">
-      <div><span className="game-overline">Partida local</span><h2>{game === "haxball" ? "Monte as equipes" : "Você contra um bot"}</h2><p>{game === "haxball" ? "Escolha quantos bots entram em cada equipe. Você joga pela equipe branca." : "Controle o taco branco com WASD. O bot controla o taco laranja."}</p></div>
-      {game === "haxball" && <div className="bot-counts"><label>Aliados (0–4)<select value={bots.blue} onChange={(event) => setBots((value) => ({ ...value, blue: Number(event.target.value) }))}>{[0, 1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}</select></label><label>Adversários (1–5)<select value={bots.orange} onChange={(event) => setBots((value) => ({ ...value, orange: Number(event.target.value) }))}>{[1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count}</option>)}</select></label></div>}
-    </div> : <div className="game-online-panel">
-      {!room ? <>
-        <div className="game-online-head"><div><span className="game-overline">Salas públicas</span><h2>Entre em campo.</h2><p>Sem conta. Escolha um nome, crie uma sala ou entre em uma partida disponível.</p></div><div className="game-online-controls"><label>Seu nome<input maxLength={20} value={name} onChange={(event) => setName(event.target.value)} placeholder="Seu nome" /></label><label>Equipe ao entrar<select value={team} onChange={(event) => setTeam(event.target.value as GameTeam)}><option value="blue">Branca</option><option value="orange">Laranja</option></select></label><button className="game-primary-button" type="button" disabled={busy} onClick={createRoom}>Criar sala <ArrowRight size={16} /></button></div></div>
-        <div className="game-room-code-entry"><label>Código da sala<input value={roomCode} maxLength={8} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} placeholder="XXXXXXXX" /></label><button type="button" disabled={busy || !/^[A-Z0-9]{8}$/.test(roomCode)} onClick={() => void joinRoom(roomCode)}>Entrar pelo código <ArrowRight size={15} /></button></div>
-        <div className="game-room-list-head"><strong>Salas abertas</strong><button type="button" onClick={() => void loadRooms()}><RefreshCcw size={15} /> Atualizar</button></div>
-        <div className="game-room-list">{rooms.length ? rooms.map((entry) => <div className="game-room-card" key={entry.id}><div><span className="game-room-code">#{entry.id}</span><strong>{entry.players[0]?.name ?? "Sala pública"}</strong><small>{entry.players.length} / {max * 2} jogadores</small></div><div className="game-room-teams"><span>Branca {entry.players.filter((player) => player.team === "blue").length}/{max}</span><span>Laranja {entry.players.filter((player) => player.team === "orange").length}/{max}</span></div><button disabled={busy || entry.players.length >= max * 2} onClick={() => void joinRoom(entry.id)}>Entrar <ArrowRight size={16} /></button></div>) : <p className="game-rooms-empty">Nenhuma sala ativa. Crie a primeira.</p>}</div>
-      </> : <div className="game-active-room">
-        <div className="game-active-heading">
-          <div><span className="game-overline">Sala pública</span><h2>#{room.id}</h2><p>{room.status === "waiting" ? "Aguardando o dono iniciar a partida." : "Partida em andamento."}</p></div>
-          <div className="game-room-actions"><button type="button" onClick={() => navigator.clipboard.writeText(`${location.origin}/games/${game}?room=${room.id}`)}><Copy size={15} /> Copiar link</button><button type="button" onClick={() => void leaveRoom()}>Sair da sala</button></div>
+  return (
+    <main className="game-experience shell">
+      <div className="game-crumb">
+        <Link href="/games"><ArrowLeft size={15} /> Todos os jogos</Link>
+        <span>/</span>
+        <span>{labels[game]}</span>
+      </div>
+
+      <div className="game-page-heading">
+        <div>
+          <p className="eyebrow"><span /> Playground / {game === "haxball" ? "01" : "02"}</p>
+          <h1>{labels[game]}<span>.</span></h1>
+          <p>{descriptions[game]}</p>
         </div>
-        <div className="game-roster"><div><strong>Equipe branca</strong>{room.players.filter((p) => p.team === "blue").map((p) => <span key={p.id}>{p.name}{p.id === playerId ? " (você)" : ""}</span>)}<small>{room.players.filter((p) => p.team === "blue").length} / {max}</small></div><div><strong>Equipe laranja</strong>{room.players.filter((p) => p.team === "orange").map((p) => <span key={p.id}>{p.name}{p.id === playerId ? " (você)" : ""}</span>)}<small>{room.players.filter((p) => p.team === "orange").length} / {max}</small></div></div>
-        {room.status === "waiting" && room.ownerId === playerId && ownerToken && <div className="game-start-row"><span>{room.players.some((p) => p.team === "blue") && room.players.some((p) => p.team === "orange") ? "As equipes estão prontas." : "Aguarde ao menos um jogador em cada equipe."}</span><button className="game-primary-button" type="button" disabled={busy || !room.players.some((p) => p.team === "blue") || !room.players.some((p) => p.team === "orange")} onClick={() => void startRoom()}>Iniciar partida <ArrowRight size={16} /></button></div>}
-      </div>}
-      {error && <p role="alert" className="game-error">{error}</p>}
-    </div>}
-    {(mode === "bot" || room) && <GameCanvas key={`${game}-${mode}-${bots.blue}-${bots.orange}-${room?.id ?? "local"}`} game={game} mode={mode} bots={bots} room={room} playerId={playerId} ownerToken={ownerToken} onRoomUpdate={onRoomUpdate} />}
-    <div className="game-notes"><div><Users size={19} /><span>{game === "haxball" ? "Até cinco por equipe nas salas online" : "Um jogador por equipe nas salas online"}</span></div><p>Com as duas equipes prontas, o dono da sala inicia a partida. Salas sem atividade expiram automaticamente.</p></div>
-  </main>;
+      </div>
+
+      <div className="game-mode-switch" role="tablist" aria-label="Modo de jogo">
+        <button role="tab" aria-selected={mode === "bot"} className={mode === "bot" ? "active" : ""} onClick={() => { if (room) void leaveRoom(); setMode("bot"); setError(""); }}>Versus bot</button>
+        <button role="tab" aria-selected={mode === "online"} className={mode === "online" ? "active" : ""} onClick={() => { setMode("online"); setError(""); }}>Salas online</button>
+      </div>
+
+      {mode === "bot" ? (
+        <div className="game-setup">
+          <div>
+            <span className="game-overline">Partida local</span>
+            <h2>{game === "haxball" ? "Monte as equipes" : "Você contra um bot"}</h2>
+            <p>{game === "haxball" ? "Escolha quantos bots entram em campo para simular um jogo completo." : "Teste o controle e a física numa partida rápida."}</p>
+          </div>
+          {game === "haxball" && (
+            <div className="bot-counts">
+              <label>Aliados (0–4)
+                <select value={bots.blue} onChange={(event) => setBots((value) => ({ ...value, blue: Number(event.target.value) }))}>
+                  {Array.from({ length: 5 }, (_, index) => <option key={index} value={index}>{index}</option>)}
+                </select>
+              </label>
+              <label>Adversários (1–5)
+                <select value={bots.orange} onChange={(event) => setBots((value) => ({ ...value, orange: Number(event.target.value) }))}>
+                  {Array.from({ length: 5 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1}</option>)}
+                </select>
+              </label>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="game-online-panel">
+          {!room ? (
+            <>
+              <div className="game-online-head">
+                <div>
+                  <span className="game-overline">Salas públicas</span>
+                  <h2>Entre em campo.</h2>
+                  <p>Sem conta. Escolha um nome, crie uma sala ou entre em uma partida em andamento.</p>
+                </div>
+                <div className="game-name-row">
+                  <label>Seu nome
+                    <input value={name} maxLength={20} onChange={(event) => setName(event.target.value)} placeholder="Nome" />
+                  </label>
+                  <button type="button" className="button ghost" onClick={() => { if (name.trim().length >= 2) setMode("online"); }}>Salvar</button>
+                </div>
+              </div>
+
+              <div className="game-room-code-entry">
+                <label>Código da sala
+                  <input value={roomCode} maxLength={8} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} placeholder="XXXXXXXX" />
+                </label>
+                <button type="button" className="button" onClick={() => { if (roomCode) void joinRoom(roomCode); }}>Entrar</button>
+              </div>
+
+              <div className="game-room-list-head">
+                <strong>Salas abertas</strong>
+                <button type="button" onClick={() => void loadRooms()}><RefreshCcw size={15} /> Atualizar</button>
+              </div>
+
+              <div className="game-room-list">
+                {rooms.length ? rooms.map((entry) => (
+                  <div className="game-room-card" key={entry.id}>
+                    <div>
+                      <span className="game-room-code">#{entry.id}</span>
+                      <strong>{entry.players[0]?.name ?? "Sala"}</strong>
+                      <small>{entry.players.length}/{max + max} jogadores</small>
+                    </div>
+                    <button type="button" onClick={() => void joinRoom(entry.id)}>Entrar</button>
+                  </div>
+                )) : <p className="game-empty-state">Nenhuma sala aberta no momento.</p>}
+              </div>
+            </>
+          ) : (
+            <div className="game-active-room">
+              <div className="game-active-heading">
+                <div>
+                  <span className="game-overline">Sala pública</span>
+                  <h2>#{room.id}</h2>
+                  <p>{room.status === "waiting" ? "Aguardando o dono iniciar a partida." : "Partida em andamento."}</p>
+                </div>
+                <div className="game-room-actions">
+                  <button type="button" onClick={() => navigator.clipboard.writeText(`${location.origin}/games/${game}?room=${room.id}`)}><Copy size={15} /> Copiar link</button>
+                  <button type="button" onClick={() => void leaveRoom()} className="ghost">Sair</button>
+                </div>
+              </div>
+
+              <div className="game-roster">
+                <div>
+                  <strong>Equipe branca</strong>
+                  {room.players.filter((p) => p.team === "blue").map((p) => (
+                    <span key={p.id}>{p.name}{p.id === playerId ? " (você)" : ""}</span>
+                  ))}
+                </div>
+                <div>
+                  <strong>Equipe laranja</strong>
+                  {room.players.filter((p) => p.team === "orange").map((p) => (
+                    <span key={p.id}>{p.name}{p.id === playerId ? " (você)" : ""}</span>
+                  ))}
+                </div>
+              </div>
+
+              {room.status === "waiting" && room.ownerId === playerId && ownerToken && (
+                <div className="game-start-row">
+                  <span>{room.players.some((p) => p.team === "blue") && room.players.some((p) => p.team === "orange") ? "Tudo pronto para iniciar." : "Precisa de um jogador em cada lado."}</span>
+                  <button type="button" onClick={() => void startRoom()} className="button">Iniciar partida</button>
+                </div>
+              )}
+            </div>
+          )}
+          {error && <p role="alert" className="game-error">{error}</p>}
+        </div>
+      )}
+
+      {(mode === "bot" || room) && (
+        <GameCanvas
+          key={`${game}-${mode}-${bots.blue}-${bots.orange}-${room?.id ?? "local"}`}
+          game={game}
+          mode={mode}
+          bots={bots}
+          room={room}
+          playerId={playerId}
+          ownerToken={ownerToken}
+          onRoomUpdate={onRoomUpdate}
+        />
+      )}
+
+      <div className="game-notes">
+        <div><Users size={19} /><span>{game === "haxball" ? "Até cinco por equipe nas salas online" : "Um jogador por equipe nas salas online"}</span></div>
+        <p>Abra o console (F12) para ver logs de sincronização. O host publica o estado a cada frame e os demais convergem via reconciliação.</p>
+      </div>
+    </main>
+  );
 }
