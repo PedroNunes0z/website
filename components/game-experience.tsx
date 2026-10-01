@@ -287,13 +287,13 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   }, [resync]);
 
   const handleRealtimeEvent = useCallback((event: RealtimeClientEvent) => {
-    console.log(`[Realtime] Event received:`, event.type, event.name);
-
     if (event.type === "resync") {
       console.log(`[Realtime] Resync triggered:`, event.reason);
       requestResync(true);
       return;
     }
+
+    console.log(`[Realtime] Event received:`, event.type, event.name);
 
     const data = event.data;
     if (!isVersionedEvent(data)) {
