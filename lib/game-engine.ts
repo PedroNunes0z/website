@@ -153,6 +153,18 @@ function keepBallInBounds(ball: GameObject, game: GameId) {
       ball.x = HALF_WIDTH - 11;
       ball.vx = -Math.abs(ball.vx) * restitution;
     }
+  } else {
+    // Fundo da rede. Quem não é o host só congela quando o snapshot do host
+    // traz o gelo do gol (até ~80 ms depois), então sem este limite a bola
+    // atravessaria o gol e sairia de campo nesse intervalo.
+    const back = HALF_WIDTH + GOAL_DEPTH[game] - 11;
+    if (ball.x > back) {
+      ball.x = back;
+      ball.vx = -Math.abs(ball.vx) * restitution;
+    } else if (ball.x < -back) {
+      ball.x = -back;
+      ball.vx = Math.abs(ball.vx) * restitution;
+    }
   }
 }
 
@@ -427,7 +439,24 @@ function kick(state: GameSnapshot, player: GameActor, input: GameInput) {
   player.cooldown = 0.45;
 }
 
-export function stepGame(state: GameSnapshot, inputs: Record<string, GameInput>, lastKicks: Record<string, number>, dt: number) {
+export interface StepOptions {
+  /**
+   * `false` para o cliente convidado: placar, gelo e vencedor são escritos
+   * apenas pelo host, então a simulação local assiste ao gol pelo snapshot em
+   * vez de marcá-lo sozinha (evita gol fantasma quando as duas simulações
+   * divergem na linha de gol).
+   */
+  authoritative?: boolean;
+}
+
+export function stepGame(
+  state: GameSnapshot,
+  inputs: Record<string, GameInput>,
+  lastKicks: Record<string, number>,
+  dt: number,
+  options: StepOptions = {},
+) {
+  const authoritative = options.authoritative !== false;
   if (state.winner) return;
   const delta = clamp(dt, 0, 0.05);
   if (state.freeze > 0) {
@@ -493,10 +522,110 @@ export function stepGame(state: GameSnapshot, inputs: Record<string, GameInput>,
     const ballSpeed = Math.hypot(ball.vx, ball.vy);
     if (ballSpeed > max) { ball.vx *= max / ballSpeed; ball.vy *= max / ballSpeed; }
     const goalThreshold = HALF_WIDTH + (state.game === "haxball" ? 11 : 4);
-    if (ball.x < -goalThreshold && Math.abs(ball.y) < goalHalf - 11) { scoreGoal(state, "orange"); break; }
-    if (ball.x > goalThreshold && Math.abs(ball.y) < goalHalf - 11) { scoreGoal(state, "blue"); break; }
+    if (ball.x < -goalThreshold && Math.abs(ball.y) < goalHalf - 11) {
+      if (authoritative) scoreGoal(state, "orange");
+      break;
+    }
+    if (ball.x > goalThreshold && Math.abs(ball.y) < goalHalf - 11) {
+      if (authoritative) scoreGoal(state, "blue");
+      break;
+    }
   }
   state.revision += 1;
+}
+
+// Convergência da simulação local de um convidado em direção ao snapshot do host.
+const CORRECTION_TAU = 0.15;
+const LOCAL_CORRECTION_TAU = 0.35;
+const LOCAL_DEADZONE = 16;
+const SNAP_DISTANCE = 80;
+
+/**
+ * Reconcilia a simulação local de um cliente convidado com o snapshot
+ * autoritativo do host.
+ *
+ * O convidado roda a mesma física a 60 fps, mas com um `dt` próprio e inputs
+ * remotos que chegam em intervalos de rede — a deriva em relação ao host é
+ * inevitável. Em vez de trocar o estado inteiro a cada snapshot (o que faria o
+ * jogo "pular" na taxa de rede), posições e velocidades convergem
+ * exponencialmente para o alvo e apenas divergências grandes (gol, reset de
+ * posições) aplicam snap instantâneo.
+ *
+ * Estado discreto — placar, gelo, vencedor e elenco — é sempre do host, e o
+ * pawn próprio do convidado recebe uma correção mais leve para não sentir
+ * "elástico" no controle.
+ */
+export function reconcileAuthoritativeState(
+  local: GameSnapshot,
+  target: GameSnapshot | null,
+  localPlayerId: string | null,
+  dt: number,
+) {
+  if (!target || local === target || !(dt > 0)) return;
+
+  // Reiniciar a partida faz o relógio do host voltar a zero; nesse caso o alvo
+  // manda, senão a partida nunca mais voltaria a contar do começo.
+  const restarted = target.elapsed + 1 < local.elapsed;
+  local.score.blue = target.score.blue;
+  local.score.orange = target.score.orange;
+  local.winner = target.winner;
+  local.freeze = restarted ? target.freeze : Math.max(local.freeze, target.freeze);
+  local.elapsed = restarted ? target.elapsed : Math.max(local.elapsed, target.elapsed);
+
+  // Elenco: quem saiu some, quem entrou copia o estado autoritativo.
+  const known = new Map(local.players.map((player) => [player.id, player]));
+  local.players = local.players.filter((player) => target.players.some((entry) => entry.id === player.id));
+  for (const entry of target.players) {
+    const existing = known.get(entry.id);
+    if (existing) {
+      existing.team = entry.team;
+      existing.name = entry.name;
+    } else {
+      local.players.push({ ...entry });
+    }
+  }
+
+  const gain = 1 - Math.exp(-dt / CORRECTION_TAU);
+  const localGain = 1 - Math.exp(-dt / LOCAL_CORRECTION_TAU);
+  for (const actor of local.players) {
+    const authoritative = target.players.find((entry) => entry.id === actor.id);
+    if (!authoritative) continue;
+    const dx = authoritative.x - actor.x;
+    const dy = authoritative.y - actor.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance > SNAP_DISTANCE) {
+      // Reset de posições ou teleporte: adota tudo, menos `lastDashSeq`, que só
+      // pode avançar (voltar para trás reativaria um dash já consumido).
+      const lastDashSeq = Math.max(actor.lastDashSeq, authoritative.lastDashSeq);
+      Object.assign(actor, authoritative, { lastDashSeq });
+      continue;
+    }
+    const isLocal = actor.id === localPlayerId;
+    if (isLocal && distance < LOCAL_DEADZONE) continue;
+    const weight = isLocal ? localGain : gain;
+    actor.x += dx * weight;
+    actor.y += dy * weight;
+    actor.vx += (authoritative.vx - actor.vx) * weight;
+    actor.vy += (authoritative.vy - actor.vy) * weight;
+  }
+
+  const ball = local.ball;
+  const authoritativeBall = target.ball;
+  const ballX = authoritativeBall.x - ball.x;
+  const ballY = authoritativeBall.y - ball.y;
+  const ballDistance = Math.hypot(ballX, ballY);
+  if (ballDistance > SNAP_DISTANCE) {
+    ball.x = authoritativeBall.x;
+    ball.y = authoritativeBall.y;
+    ball.vx = authoritativeBall.vx;
+    ball.vy = authoritativeBall.vy;
+    ball.spin = authoritativeBall.spin;
+  } else {
+    ball.x += ballX * gain;
+    ball.y += ballY * gain;
+    ball.vx += (authoritativeBall.vx - ball.vx) * gain;
+    ball.vy += (authoritativeBall.vy - ball.vy) * gain;
+  }
 }
 
 export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, localPlayerId: string) {

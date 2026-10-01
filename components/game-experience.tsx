@@ -3,7 +3,7 @@
 import { ArrowLeft, ArrowRight, Copy, Maximize2, Minimize2, RefreshCcw, Users } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createBotGame, createOnlineGame, drawGame, pointerToField, stepGame, updateOnlineRoster, type BotCounts, type GameInput, type GameSnapshot } from "@/lib/game-engine";
+import { createBotGame, createOnlineGame, drawGame, pointerToField, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameInput, type GameSnapshot } from "@/lib/game-engine";
 import type { GameId, GameRoom, GameTeam } from "@/lib/games";
 import { isVersionedEvent, type RealtimeClientEvent } from "@/lib/realtime";
 import { useAblyRoom, type RealtimeStatus } from "@/lib/use-ably-room";
@@ -47,6 +47,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const inputRef = useRef<GameInput>({ x: 0, y: 0, sprint: false, kickSeq: 0, dashSeq: 0, aimX: 0, aimY: 0, power: 0, spin: false, kickSpin: false, charging: false });
   const remoteInputsRef = useRef<Record<string, GameInput>>({});
   const lastKicksRef = useRef<Record<string, number>>({});
+  const targetRef = useRef<GameSnapshot | null>(null);
+  const targetRevisionRef = useRef(-1);
+  const hasAuthoritativeRef = useRef(false);
   const keysRef = useRef<Set<string>>(new Set());
   const pointerDownAt = useRef(0);
   const lastGoalCountRef = useRef(0);
@@ -68,6 +71,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       : createBotGame(game, bots);
     lastKicksRef.current = {};
     remoteInputsRef.current = {};
+    targetRef.current = null;
+    targetRevisionRef.current = -1;
+    hasAuthoritativeRef.current = false;
     lastGoalCountRef.current = 0;
     hudScoreRef.current = { blue: 0, orange: 0 };
     goalUntilRef.current = 0;
@@ -132,9 +138,13 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       const host = mode === "online" && currentRoom?.ownerId === playerId && !!ownerToken;
       if (mode === "bot") {
         stepGame(stateRef.current, { local: inputRef.current }, lastKicksRef.current, dt);
-      } else if (host && currentRoom?.status === "playing") {
-        updateOnlineRoster(stateRef.current, currentRoom.players);
-        stepGame(stateRef.current, { ...remoteInputsRef.current, [playerId!]: inputRef.current }, lastKicksRef.current, dt);
+      } else if (mode === "online" && playerId && currentRoom?.status === "playing") {
+        // O convidado também simula: responde ao próprio input no mesmo frame e
+        // mantém os pawns remotos em movimento contínuo entre snapshots. O host
+        // continua sendo a fonte da verdade — a reconciliação corrige a deriva.
+        if (host) updateOnlineRoster(stateRef.current, currentRoom.players);
+        stepGame(stateRef.current, { ...remoteInputsRef.current, [playerId]: inputRef.current }, lastKicksRef.current, dt, { authoritative: host });
+        if (!host) reconcileAuthoritativeState(stateRef.current, targetRef.current, playerId, dt);
       }
       if (game === "haxball" && mode === "online" && !host && playerId) {
         const localActor = stateRef.current.players.find((actor) => actor.id === playerId);
@@ -178,9 +188,27 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
   const lastResyncRef = useRef(0);
 
+  // Guarda o snapshot autoritativo como *alvo* da reconciliação. A adoção dura
+  // (substituir a simulação local inteira) fica restrita ao primeiro snapshot e
+  // às reconexões, quando eventos podem ter se perdido; no fluxo normal o alvo
+  // apenas alimenta a correção suave aplicada a cada frame.
+  const acceptTarget = useCallback((snapshot: GameSnapshot, hard = false) => {
+    const current = targetRef.current;
+    // Reiniciar a partida zera o relógio junto com a revisão: sem tratar isso,
+    // snapshots com revisão menor seriam rejeitados para sempre.
+    const restarted = !current || snapshot.elapsed + 1 < current.elapsed;
+    if (!hard && !restarted && snapshot.revision < targetRevisionRef.current) return;
+    targetRevisionRef.current = snapshot.revision;
+    targetRef.current = snapshot;
+    if (hard || !hasAuthoritativeRef.current) {
+      stateRef.current = snapshot;
+      hasAuthoritativeRef.current = true;
+    }
+  }, []);
+
   // Sincronização autoritativa via API: na entrada na sala, após reconexões e
   // de forma periódica quando o tempo real não está ativo (fallback HTTP).
-  const resync = useCallback(async (): Promise<boolean> => {
+  const resync = useCallback(async (hard = false): Promise<boolean> => {
     if (mode !== "online" || !roomId || !playerId) return false;
     try {
       const response = await fetch(`/api/games/rooms/${roomId}/state?game=${game}`, { cache: "no-store" });
@@ -193,21 +221,21 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       onRoomUpdate(state.room);
       remoteInputsRef.current = state.inputs;
       const host = state.room.ownerId === playerId && !!ownerToken;
-      if (!host && state.room.status === "playing" && state.snapshot) stateRef.current = state.snapshot;
+      if (!host && state.room.status === "playing" && state.snapshot) acceptTarget(state.snapshot, hard);
       setNetworkError("");
       return true;
     } catch (error) {
       setNetworkError(error instanceof Error ? error.message : "Conexão indisponível.");
       return false;
     }
-  }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate]);
+  }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate, acceptTarget]);
 
   const requestResync = useCallback((force = false) => {
     const now = Date.now();
     // Evita rajadas de ressincronização quando vários eventos chegam juntos.
     if (!force && now - lastResyncRef.current < 1500) return;
     lastResyncRef.current = now;
-    void resync();
+    void resync(force);
   }, [resync]);
 
   const handleRealtimeEvent = useCallback((event: RealtimeClientEvent) => {
@@ -225,10 +253,10 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     const host = currentRoom?.ownerId === playerId && !!ownerToken;
     switch (event.name) {
       case "game-snapshot-updated":
-        if (!host && data.playerId !== playerId && currentRoom?.status === "playing" && data.snapshot) stateRef.current = data.snapshot;
+        if (!host && data.playerId !== playerId && currentRoom?.status === "playing" && data.snapshot) acceptTarget(data.snapshot);
         break;
       case "game-input-updated":
-        if (host && data.playerId && data.playerId !== playerId && data.input) remoteInputsRef.current[data.playerId] = data.input;
+        if (data.playerId && data.input) remoteInputsRef.current[data.playerId] = data.input;
         break;
       case "game-state-updated":
       case "player-joined":
@@ -244,7 +272,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         onRoomUpdate(null);
         break;
     }
-  }, [playerId, ownerToken, onRoomUpdate, requestResync]);
+  }, [playerId, ownerToken, onRoomUpdate, requestResync, acceptTarget]);
 
   const realtimeStatus = useAblyRoom({
     roomId: mode === "online" ? roomId : null,
@@ -261,7 +289,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const write = async () => {
-      let nextDelay = 150;
+      let nextDelay = 80;
       try {
         const base = `/api/games/rooms/${roomId}/state`;
         const currentRoom = roomRef.current;
@@ -301,7 +329,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     const read = async () => {
       if (!active) return;
       const ok = await resync();
-      if (active) timer = setTimeout(read, ok ? 150 : 1000);
+      if (active) timer = setTimeout(read, ok ? 80 : 1000);
     };
     void read();
     return () => { active = false; clearTimeout(timer); };

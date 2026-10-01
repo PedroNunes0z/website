@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = await readFile(new URL("../lib/game-engine.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { createOnlineGame, createBotGame, botShotPower, resolveKickDirection, stepGame } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { createOnlineGame, createBotGame, botShotPower, resolveKickDirection, stepGame, reconcileAuthoritativeState } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 const roster = [
   { id: "white", name: "Branco", team: "blue", joinedAt: 0, lastSeen: 0 },
@@ -181,4 +181,77 @@ test("um gol atualiza o placar e pausa a partida", () => {
   stepGame(state, {}, {}, 1 / 60);
   assert.equal(state.score.blue, 1);
   assert.ok(state.freeze > 0);
+});
+
+test("sem autoridade o convidado não marca gol nem pausa, e a bola não escapa da rede", () => {
+  const state = createOnlineGame("haxball", roster);
+  state.ball.x = 512;
+  state.ball.y = 0;
+  state.ball.vx = 700;
+  for (let frame = 0; frame < 60; frame++) stepGame(state, {}, {}, 1 / 60, { authoritative: false });
+  assert.equal(state.score.blue, 0);
+  assert.equal(state.freeze, 0);
+  assert.equal(state.winner, null);
+  // Esperando o gelo do snapshot do host, a bola pode ir até o fundo da rede
+  // (500 + 70 - 11), mas nunca atravessá-la.
+  assert.ok(state.ball.x <= 559.001, `bola em ${state.ball.x}`);
+  assert.ok(state.ball.x >= -559.001, `bola em ${state.ball.x}`);
+});
+
+test("a reconciliação aproxima o estado do host sem trocá-lo de uma vez", () => {
+  const local = createOnlineGame("haxball", roster);
+  const target = createOnlineGame("haxball", roster);
+  local.ball.x = 10;
+  target.ball.x = 30;
+  local.players[1].x = 120;
+  target.players[1].x = 160;
+  local.players[0].x = -210;
+  target.players[0].x = -200;
+  reconcileAuthoritativeState(local, target, "white", 1 / 60);
+  assert.ok(local.ball.x > 10 && local.ball.x < 30);
+  assert.ok(local.players[1].x > 120 && local.players[1].x < 160);
+  assert.equal(local.players[0].x, -210);
+});
+
+test("a reconciliação faz snap em divergência grande e copia o estado do host", () => {
+  const local = createOnlineGame("haxball", roster);
+  const target = createOnlineGame("haxball", roster);
+  target.ball.x = 300;
+  target.score.blue = 3;
+  target.freeze = 1.2;
+  target.elapsed = 42;
+  target.winner = "orange";
+  target.players[0].x = 0;
+  target.players[0].lastDashSeq = 2;
+  target.players.push({ ...target.players[0], id: "extra", name: "Extra", team: "orange", lastDashSeq: 0 });
+  local.players[0].lastDashSeq = 5;
+  local.players.pop();
+  reconcileAuthoritativeState(local, target, "white", 1 / 60);
+  assert.equal(local.ball.x, 300);
+  assert.equal(local.score.blue, 3);
+  assert.equal(local.freeze, 1.2);
+  assert.equal(local.elapsed, 42);
+  assert.equal(local.winner, "orange");
+  assert.equal(local.players.length, 3);
+  assert.equal(local.players[0].lastDashSeq, 5);
+});
+
+test("a reconciliação é inofensiva sem alvo ou quando local e alvo são o mesmo objeto", () => {
+  const state = createOnlineGame("haxball", roster);
+  const before = state.ball.x;
+  reconcileAuthoritativeState(state, null, "white", 1 / 60);
+  reconcileAuthoritativeState(state, state, "white", 1 / 60);
+  assert.equal(state.ball.x, before);
+});
+
+test("reiniciar a partida zera relógio, placar e gelo na reconciliação", () => {
+  const local = createOnlineGame("haxball", roster);
+  const target = createOnlineGame("haxball", roster);
+  local.elapsed = 120;
+  local.freeze = 0.8;
+  local.score.blue = 4;
+  reconcileAuthoritativeState(local, target, "white", 1 / 60);
+  assert.equal(local.elapsed, 0);
+  assert.equal(local.freeze, 0);
+  assert.equal(local.score.blue, 0);
 });
