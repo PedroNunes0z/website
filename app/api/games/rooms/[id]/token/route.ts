@@ -11,7 +11,10 @@ type RouteContext = { params: Promise<{ id: string }> };
 /**
  * Emite um token request assinado no servidor para o canal da sala.
  * A `ABLY_API_KEY` nunca chega ao navegador; o token é restrito a
- * `subscribe` no canal `game-room:<roomId>` do jogador.
+ * subscribe+publish no canal `game-room:<roomId>` do jogador, com o
+ * `clientId` fixado ao playerId — o publish permite que inputs e snapshots
+ * fluam direto pelo websocket, e o clientId fixo impede que um jogador
+ * publique se passando por outro.
  */
 export async function POST(request: NextRequest, context: RouteContext) {
   if (!isSameOrigin(request)) return NextResponse.json({ error: "Origem inválida." }, { status: 403 });

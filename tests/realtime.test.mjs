@@ -13,9 +13,9 @@ test("o canal é por sala e restrito ao escopo game-room:*", () => {
   assert.notEqual(roomChannelName("ABCD1234"), roomChannelName("WXYZ9876"));
 });
 
-test("a capacidade do token limita o canal e permite apenas subscribe", () => {
+test("a capacidade do token limita o canal e permite subscribe + publish", () => {
   const capability = JSON.parse(roomTokenCapability("ABCD1234"));
-  assert.deepEqual(capability, { "game-room:ABCD1234": ["subscribe"] });
+  assert.deepEqual(capability, { "game-room:ABCD1234": ["subscribe", "publish"] });
 });
 
 test("os nomes de eventos exigidos pelo contrato estão presentes", () => {

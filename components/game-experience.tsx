@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createBotGame, createOnlineGame, drawGame, pointerToField, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameInput, type GameSnapshot } from "@/lib/game-engine";
 import type { GameId, GameRoom, GameTeam } from "@/lib/games";
-import { isVersionedEvent, type RealtimeClientEvent } from "@/lib/realtime";
+import { isVersionedEvent, REALTIME_VERSION, type RealtimeClientEvent } from "@/lib/realtime";
 import { useAblyRoom, type RealtimeStatus } from "@/lib/use-ably-room";
 
 const labels = { haxball: "Haxball", hoquei: "Hóquei" };
@@ -66,6 +66,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const transportRef = useRef<RealtimeStatus>("idle");
   const netStatsRef = useRef({ snapshots: 0, inputSends: 0, snapshotSends: 0, driftMs: 0, lastDiag: 0 });
   const deliveryRef = useRef(0);
+  const lastInputPersistAtRef = useRef(0);
+  const lastSnapshotPersistAtRef = useRef(0);
   
   const roomId = room?.id ?? null;
   const roomStatus = room?.status;
@@ -306,27 +308,45 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     const currentRoom = roomRef.current;
     const host = currentRoom?.ownerId === playerId && !!ownerToken;
+    // `fromClientId` é atribuído pelo Ably ao publicador (o token é amarrado
+    // ao playerId, então não é forjável); `null` identifica eventos vindos do
+    // servidor pela API REST, que são confiáveis por definição.
+    const fromClientId = event.fromClientId;
 
     switch (event.name) {
-      case "game-snapshot-updated":
+      case "game-snapshot-updated": {
         if (typeof data.sentAt === "number") deliveryRef.current = Date.now() - data.sentAt;
+        // Snapshots valem apenas vindos do host: na publicação direta o
+        // clientId tem que ser o dono da sala (um convidado malicioso não
+        // pode plantar snapshot falsa) e no caminho HTTP o servidor já
+        // validou o ownerToken antes de republicar.
+        const trustedSource = fromClientId === null || fromClientId === currentRoom?.ownerId;
         // Alvo da reconciliação — nunca adoção dura. Substituir o estado local
         // inteiro a cada snapshot faz o convidado enxergar uma posição de
         // ~100–250 ms atrás (publicação + entrega) e sentir o jogo travando.
-        if (!host && data.playerId !== playerId && currentRoom?.status === "playing" && data.snapshot) {
+        if (trustedSource && !host && data.playerId !== playerId && currentRoom?.status === "playing" && data.snapshot) {
           netStatsRef.current.snapshots += 1;
           acceptTarget(data.snapshot);
         }
         break;
-      case "game-input-updated":
+      }
+      case "game-input-updated": {
         if (typeof data.sentAt === "number") deliveryRef.current = Date.now() - data.sentAt;
-        if (data.playerId && data.input) {
-          remoteInputsRef.current[data.playerId] = data.input;
+        // A autoria do input vem do clientId atribuído pelo Ably; no caminho
+        // de compatibilidade (publicado pelo servidor, sem clientId), cai
+        // para o playerId do payload validado na rota HTTP.
+        const authorId = fromClientId ?? data.playerId;
+        if (authorId && data.input) {
+          remoteInputsRef.current[authorId] = data.input;
         }
         break;
+      }
       case "game-state-updated":
       case "player-joined":
-      case "player-left":
+      case "player-left": {
+        // Eventos de sala só nascem no servidor. Com publish concedido aos
+        // jogadores, um cliente poderia forjar entrada/saída — ignorados.
+        if (fromClientId !== null) break;
         if (data.room) {
           roomRef.current = data.room;
           onRoomUpdate(data.room);
@@ -334,14 +354,16 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
           requestResync();
         }
         break;
+      }
       case "game-ended":
+        if (fromClientId !== null) break;
         console.log(`[Room] Game ended`);
         onRoomUpdate(null);
         break;
     }
   }, [playerId, ownerToken, onRoomUpdate, requestResync, acceptTarget]);
 
-  const realtimeStatus = useAblyRoom({
+  const { status: realtimeStatus, publish: publishRealtime } = useAblyRoom({
     roomId: mode === "online" ? roomId : null,
     game,
     playerId: mode === "online" ? playerId : null,
@@ -364,12 +386,19 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     let inputInFlight = 0;
     let snapshotInFlight = 0;
     let lastInputJson: string | null = null;
-    // Cadência fixa de 50ms, independente da latência. Cada requisição leva o
+    // Cadência fixa de 50ms, independente da latência. Cada transmissão leva o
     // estado mais recente e a próxima sai 50ms depois, mesmo com a anterior em
     // voo — antes, esperar a resposta (300–400ms em serverless) limitava o
     // fluxo inteiro a ~2 envios por segundo, que era o lag sentido por todos.
     const TICK_MS = 50;
     const MAX_IN_FLIGHT = 3;
+    // Com o tempo real ativo, inputs e snapshots trafegam direto pelo
+    // websocket do Ably (sem POST → Redis → Ably no caminho, que custava
+    // ~300–400ms por evento); o POST fica só como persistência lenta para o
+    // Redis, que alimenta o resync de quem entra/reconecta e o polling de
+    // quem está no modo compatibilidade.
+    const PERSIST_INPUT_MS = 250;
+    const PERSIST_SNAPSHOT_MS = 300;
 
     const post = (payload: unknown) => {
       const startedAt = performance.now();
@@ -400,24 +429,64 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       const now = performance.now();
       const currentRoom = roomRef.current;
       const host = currentRoom?.ownerId === playerId && !!ownerToken;
+      const live = transportRef.current === "connected";
+      const playing = currentRoom?.status === "playing";
       const stats = netStatsRef.current;
+      const sentAt = Date.now();
 
       // Input: só sai quando muda de fato (virar, correr, carregar o chute),
       // o que elimina o tráfego de um jogador parado.
       const inputJson = JSON.stringify(inputRef.current);
-      if (inputInFlight < MAX_IN_FLIGHT && inputJson !== lastInputJson) {
-        inputInFlight += 1;
+      const inputChanged = inputJson !== lastInputJson;
+      if (inputChanged) {
         lastInputJson = inputJson;
+        if (live) {
+          // Caminho quente: direto no canal. O Ably atribui o clientId do
+          // token a mensagem, provando a autoria para os demais jogadores.
+          stats.inputSends += 1;
+          publishRealtime("game-input-updated", { v: REALTIME_VERSION, playerId, input: { ...inputRef.current }, sentAt });
+        }
+      }
+      if (live) {
+        // Persistência lenta: sem `notify` o servidor só grava no Redis, sem
+        // republicar no canal — senão o destinatário receberia uma versão
+        // defasada do input ~300ms depois (regressão de movimento).
+        if (now - lastInputPersistAtRef.current >= PERSIST_INPUT_MS && inputInFlight < 1) {
+          inputInFlight += 1;
+          lastInputPersistAtRef.current = now;
+          void post({ game, playerId, action: "input", input: { ...inputRef.current }, notify: false }).finally(() => { inputInFlight -= 1; });
+        }
+      } else if (inputChanged && inputInFlight < MAX_IN_FLIGHT) {
+        // Compatibilidade: sem Ably, o POST continua sendo o transporte e o
+        // servidor republica o input no canal para os demais.
+        inputInFlight += 1;
         stats.inputSends += 1;
-        void post({ game, playerId, action: "input", input: inputRef.current }).finally(() => { inputInFlight -= 1; });
+        void post({ game, playerId, action: "input", input: { ...inputRef.current } }).finally(() => { inputInFlight -= 1; });
       }
 
-      // Snapshot: o host publica o estado autoritativo no mesmo ritmo; envios
-      // intermediários são descartados, porque o próximo carrega o estado novo.
-      if (host && currentRoom?.status === "playing" && snapshotInFlight < MAX_IN_FLIGHT) {
-        snapshotInFlight += 1;
-        stats.snapshotSends += 1;
-        void post({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current }).finally(() => { snapshotInFlight -= 1; });
+      // Snapshot: o host publica o estado autoritativo no mesmo ritmo. Cópia
+      // rasa por nível — a simulação muta `stateRef.current` a cada frame e a
+      // codificação da mensagem pode ocorrer depois do return do publish.
+      if (host && playing) {
+        const snapshotCopy: GameSnapshot = {
+          ...stateRef.current,
+          players: stateRef.current.players.map((actor) => ({ ...actor })),
+          ball: { ...stateRef.current.ball },
+          score: { ...stateRef.current.score },
+        };
+        if (live) {
+          stats.snapshotSends += 1;
+          publishRealtime("game-snapshot-updated", { v: REALTIME_VERSION, playerId, snapshot: snapshotCopy, sentAt });
+          if (now - lastSnapshotPersistAtRef.current >= PERSIST_SNAPSHOT_MS && snapshotInFlight < 1) {
+            snapshotInFlight += 1;
+            lastSnapshotPersistAtRef.current = now;
+            void post({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current, notify: false }).finally(() => { snapshotInFlight -= 1; });
+          }
+        } else if (snapshotInFlight < MAX_IN_FLIGHT) {
+          snapshotInFlight += 1;
+          stats.snapshotSends += 1;
+          void post({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current }).finally(() => { snapshotInFlight -= 1; });
+        }
       }
 
       // Resumo de rede a cada ~2s: escrita, entrega Ably, taxas e atraso de sync.
@@ -437,7 +506,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     tick();
     return () => { active = false; clearTimeout(timer); };
-  }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate]);
+  }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate, publishRealtime]);
 
   useEffect(() => {
     if (mode !== "online" || !roomId || !playerId || realtimeLive) return;

@@ -4,8 +4,23 @@ import type { GameInput, GameSnapshot } from "@/lib/game-engine";
 /**
  * Contrato compartilhado entre servidor e cliente para os eventos de tempo real
  * publicados no Ably. Eventos são versionados (`v`) e pequenos; o servidor
- * segue sendo a fonte da verdade — os eventos são apenas notificações para
- * os clientes aplicarem/ressincronizarem o estado.
+ * segue sendo a fonte da verdade para o estado persistente da sala.
+ *
+ * Dois publicadores convivem no mesmo canal:
+ * - Servidor (REST, sem clientId): eventos de sala — entrada/saída de jogador,
+ *   início e fim de partida — além de inputs/snapshots quando um cliente opera
+ *   no modo compatibilidade HTTP.
+ * - Clientes (Realtime, token com `publish`): os dados quentes da partida
+ *   (inputs de cada jogador e snapshots do host) vão direto pelo websocket do
+ *   Ably, sem atravessar POST HTTP → Redis → Ably a cada transmissão — esse
+ *   caminho custava ~300–400 ms por evento em serverless e era a origem do
+ *   lag sentido por quem entra na sala.
+ *
+ * Confiança na recepção: o Ably atribui à mensagem o `clientId` do token do
+ * publicador (impossível forjar, pois o token é emitido com clientId fixo).
+ * Clientes só aceitam `game-snapshot-updated` publicado pelo dono da sala e
+ * eventos de sala vindos do servidor (`clientId` ausente); inputs valem pela
+ * identidade atribuída pelo canal.
  */
 export const REALTIME_VERSION = 1;
 
@@ -53,7 +68,17 @@ export interface RoomEventData {
 /** Tudo que o hook de tempo real entrega ao consumidor. */
 export type RealtimeClientEvent =
   | { type: "resync"; reason: "connected" | "reconnected" }
-  | { type: "message"; name: string; data: RoomEventData | null };
+  | {
+      type: "message";
+      name: string;
+      data: RoomEventData | null;
+      /**
+       * `clientId` atribuído pelo Ably ao publicador (o token é amarrado ao
+       * playerId, então não é forjável). `null` quando o evento veio do
+       * servidor via API REST — tratado como confiável.
+       */
+      fromClientId: string | null;
+    };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -67,7 +92,13 @@ export function isVersionedEvent(data: unknown): data is RoomEventData {
   return isRecord(data) && data.v === REALTIME_VERSION;
 }
 
-/** Capacidade mínima concedida ao token de um jogador: só leitura do canal da sala. */
+/**
+ * Capacidade do token de um jogador: leitura e publicação no canal da sala.
+ * O publish é o que permite ao convidado enviar inputs direto pelo websocket
+ * (e ao host publicar snapshots), cortando o servidor do caminho quente. A
+ * identidade do publicador é garantida pelo `clientId` fixado no token, e os
+ * consumidores ignoram eventos de sala publicados por clientes.
+ */
 export function roomTokenCapability(roomId: string): string {
-  return JSON.stringify({ [roomChannelName(roomId)]: ["subscribe"] });
+  return JSON.stringify({ [roomChannelName(roomId)]: ["subscribe", "publish"] });
 }

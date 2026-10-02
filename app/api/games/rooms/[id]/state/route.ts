@@ -76,23 +76,33 @@ export async function POST(request: NextRequest, context: RouteContext) {
       : body.input;
     if (body.action === "input" && validInput(normalizedInput)) {
       const persist = await acceptGameInput(game, id, body.playerId, normalizedInput);
+      // `notify: false`: cliente com tempo real ativo publicando direto no
+      // canal — o POST serve só para persistir o input no Redis (resync e
+      // fallback). Sem o publish aqui, o destinatário não receberia de volta
+      // uma versão defasada do mesmo input ~300 ms depois (regressão de
+      // movimento).
+      const notify = body.notify !== false;
       // `after`: a resposta não espera nem o Redis nem o Ably (que nunca podem
       // segurar a escrita), mas o runtime mantém a função viva até gravar e
-      // publicar. Com um `void promise` simples o serverless podia congelar
-      // antes de concluir e descartar eventos — cada perda vira salto de
-      // movimento no jogo.
+      // publicar. Persistência e notificação correm em paralelo — a escrita no
+      // Redis não pode adicionar sua latência à entrega do evento.
       after(async () => {
-        await persist();
-        await publishRoomEvent(id, "game-input-updated", { v: REALTIME_VERSION, playerId: body.playerId, input: normalizedInput, sentAt });
+        await Promise.all([
+          persist(),
+          notify ? publishRoomEvent(id, "game-input-updated", { v: REALTIME_VERSION, playerId: body.playerId, input: normalizedInput, sentAt }) : Promise.resolve(),
+        ]);
       });
       return NextResponse.json({ ok: true });
     }
     if (body.action === "snapshot" && validSnapshot(body.snapshot, game)) {
       if (typeof body.ownerToken !== "string" || body.ownerToken.length > 64) return NextResponse.json({ error: "Dono da sala inválido." }, { status: 403 });
       const persist = await acceptGameSnapshot(game, id, body.playerId, body.ownerToken, body.snapshot);
+      const notify = body.notify !== false;
       after(async () => {
-        await persist();
-        await publishRoomEvent(id, "game-snapshot-updated", { v: REALTIME_VERSION, playerId: body.playerId, snapshot: body.snapshot, sentAt });
+        await Promise.all([
+          persist(),
+          notify ? publishRoomEvent(id, "game-snapshot-updated", { v: REALTIME_VERSION, playerId: body.playerId, snapshot: body.snapshot, sentAt }) : Promise.resolve(),
+        ]);
       });
       return NextResponse.json({ ok: true });
     }

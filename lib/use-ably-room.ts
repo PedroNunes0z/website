@@ -1,7 +1,7 @@
 import Ably from "ably";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { GameId } from "@/lib/games";
-import { ROOM_EVENT_NAMES, roomChannelName, type RealtimeClientEvent, type RoomEventData } from "@/lib/realtime";
+import { ROOM_EVENT_NAMES, roomChannelName, type RealtimeClientEvent, type RoomEventData, type RoomEventName } from "@/lib/realtime";
 
 /**
  * Estado da conexão em tempo real exposto à interface.
@@ -18,6 +18,17 @@ interface UseAblyRoomOptions {
   onEvent: (event: RealtimeClientEvent) => void;
 }
 
+export interface RoomRealtime {
+  status: RealtimeStatus;
+  /**
+   * Publica um evento direto no canal da sala pelo websocket do Ably — o
+   * caminho quente da partida (inputs e snapshots), sem POST HTTP nem Redis
+   * no meio. Retorna `false` quando a conexão não está ativa (o chamador cai
+   * para o transporte HTTP de compatibilidade).
+   */
+  publish: (name: RoomEventName, data: RoomEventData) => boolean;
+}
+
 class TokenHttpError extends Error {
   constructor(public status: number) {
     super(`token request failed: ${status}`);
@@ -26,19 +37,32 @@ class TokenHttpError extends Error {
 
 /**
  * Assina somente o canal da sala atual (`game-room:<roomId>`) usando um token
- * emitido pelo servidor — a `ABLY_API_KEY` nunca chega ao navegador.
+ * emitido pelo servidor — a `ABLY_API_KEY` nunca chega ao navegador. O mesmo
+ * token permite publicar inputs/snapshots direto no canal (`publish`).
  * Reconexão automática com backoff fica a cargo do SDK oficial
  * (`disconnectedRetryTimeout` / `suspendedRetryTimeout`); ao reconectar, o
  * hook dispara um evento `resync` para corrigir eventos perdidos.
  * Cleanup completo: unsubscribe dos listeners, detach do canal e close do
  * cliente ao sair da sala ou trocar de sala (evita listeners duplicados).
  */
-export function useAblyRoom({ roomId, game, playerId, onEvent }: UseAblyRoomOptions): RealtimeStatus {
+export function useAblyRoom({ roomId, game, playerId, onEvent }: UseAblyRoomOptions): RoomRealtime {
   const [status, setStatus] = useState<RealtimeStatus>("idle");
   const onEventRef = useRef(onEvent);
+  const clientRef = useRef<Ably.Realtime | null>(null);
+  const channelRef = useRef<Ably.RealtimeChannel | null>(null);
   useEffect(() => {
     onEventRef.current = onEvent;
   });
+
+  const publish = useCallback((name: RoomEventName, data: RoomEventData): boolean => {
+    const client = clientRef.current;
+    const channel = channelRef.current;
+    if (!client || !channel || client.connection.state !== "connected") return false;
+    channel.publish(name, data).catch((error: unknown) => {
+      console.warn(`[Ably] falha ao publicar "${name}" no canal da sala:`, error);
+    });
+    return true;
+  }, []);
 
   useEffect(() => {
     if (!roomId || !playerId) return;
@@ -148,13 +172,15 @@ export function useAblyRoom({ roomId, game, playerId, onEvent }: UseAblyRoomOpti
       });
 
       const channel = client.channels.get(roomChannelName(roomId));
+      clientRef.current = client;
+      channelRef.current = channel;
       let firstMessageLogged = false;
       listener = (message: Ably.Message) => {
         if (!firstMessageLogged) {
           firstMessageLogged = true;
           log(`primeiro evento recebido no canal ("${message.name ?? "?"}") — fluxo em tempo real funcionando.`);
         }
-        emit({ type: "message", name: message.name ?? "", data: (message.data ?? null) as RoomEventData | null });
+        emit({ type: "message", name: message.name ?? "", data: (message.data ?? null) as RoomEventData | null, fromClientId: message.clientId ?? null });
       };
       for (const name of ROOM_EVENT_NAMES) channel.subscribe(name, listener);
     };
@@ -166,6 +192,8 @@ export function useAblyRoom({ roomId, game, playerId, onEvent }: UseAblyRoomOpti
       for (const timer of pendingTimers) clearTimeout(timer);
       const current = client;
       client = null;
+      clientRef.current = null;
+      channelRef.current = null;
       if (current) {
         try {
           if (listener) {
@@ -182,5 +210,5 @@ export function useAblyRoom({ roomId, game, playerId, onEvent }: UseAblyRoomOpti
     };
   }, [roomId, game, playerId]);
 
-  return roomId && playerId ? status : "idle";
+  return { status: roomId && playerId ? status : "idle", publish };
 }
