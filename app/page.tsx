@@ -148,7 +148,7 @@ export default async function Home() {
             />
             <div className="impact-grid">
               <div className="impact-story">
-                <p className="impact-label">Descontey! · 2025 — presente</p>
+                <p className="impact-label">Descontey! · 2025 · presente</p>
                 <h3 id="impact-title">Infraestrutura preparada para milhares de decisões simultâneas.</h3>
                 <p>
                   Liderança técnica e desenvolvimento full stack de uma plataforma de cupons,

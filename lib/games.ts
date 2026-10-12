@@ -100,10 +100,10 @@ export async function publishGameSnapshot(game: GameId, id: string, playerId: st
  * Valida a escrita e devolve a persistência como callback.
  *
  * A resposta HTTP volta assim que a sala (e o dono, no caso do snapshot) são
- * conferidos, e a gravação no Redis roda depois dela — no caminho crítico fica
+ * conferidos, e a gravação no Redis roda depois dela. No caminho crítico fica
  * só uma ida ao Redis, com as leituras em paralelo. Como o Redis alimenta o
  * fallback por polling, alguns milissegundos de defasagem são irrelevantes; o
- * que não pode atrasar é a notificação de tempo real.
+ * que não pode atrasar é a entrega ao transporte rápido.
  */
 export async function acceptGameInput(game: GameId, id: string, playerId: string, input: GameInput) {
   const redis = getRedis();

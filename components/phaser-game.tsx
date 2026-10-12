@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import {
   createBotGame,
+  FULL_FIELD,
   stepGame,
   type BotCounts,
   type GameInput,
@@ -45,7 +46,8 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
       if (destroyed || !hostRef.current) return;
 
       const isHaxball = game === "haxball";
-      const state: GameSnapshot = createBotGame(game, { blue: blueCount, orange: orangeCount });
+      // Tamanho cheio fixo nesta cena; o mapa dinâmico por times vale no Canvas.
+      const state: GameSnapshot = createBotGame(game, { blue: blueCount, orange: orangeCount }, FULL_FIELD);
       const lastKicks: Record<string, number> = {};
       const input: GameInput = {
         x: 0, y: 0, sprint: false, kickSeq: 0, dashSeq: 0,
@@ -121,14 +123,16 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           if (s.game === "haxball") this.drawPitch(g, ox, oy, s);
           else this.drawRink(g, ox, oy);
           // Jogadores sem borda preta; só o anel de destaque de quem joga.
+          // Azul contra vermelho no gelo.
           for (const p of s.players) {
             const r = s.game === "haxball" ? 16 : 24;
             const px = p.x + WORLD_W / 2;
             const py = p.y + WORLD_H / 2;
-            g.fillStyle(p.team === "blue" ? 0xfffdf9 : 0xff8d4f, 1);
+            const fill = p.team === "blue" ? (isHaxball ? 0xfffdf9 : 0x2456e6) : (isHaxball ? 0xff8d4f : 0xd7263d);
+            g.fillStyle(fill, 1);
             g.fillCircle(px, py, r);
             if (p.id === "local") {
-              g.lineStyle(3, s.game === "haxball" ? 0xffd166 : 0x0b3d91, 1);
+              g.lineStyle(3, s.game === "haxball" ? 0xffd166 : 0xffffff, 1);
               g.strokeCircle(px, py, r + 4);
             }
           }
@@ -137,10 +141,10 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           const by = s.ball.y + WORLD_H / 2;
           if (s.game === "haxball") {
             g.fillStyle(0xfffdf9, 1);
-            g.fillCircle(bx, by, 11);
+            g.fillCircle(bx, by, 8);
           } else {
             g.fillStyle(0x141414, 1);
-            g.fillCircle(bx, by, 11);
+            g.fillCircle(bx, by, 8);
           }
         }
 
@@ -204,7 +208,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           g.fillStyle(0x0b3d91, 1);
           for (const dx of [-160, 160]) g.fillRect(ox + FIELD_W / 2 + dx - 8, oy, 16, FIELD_H);
           g.fillStyle(0xc8102e, 1);
-          for (const dx of [-440, 440]) g.fillRect(ox + FIELD_W / 2 + dx - 2, oy, 4, FIELD_H);
+          for (const dx of [-445, 445]) g.fillRect(ox + FIELD_W / 2 + dx - 2, oy, 4, FIELD_H);
           for (const [fx, fy] of [[-300, -160], [-300, 160], [300, -160], [300, 160]]) {
             const cx = ox + FIELD_W / 2 + fx;
             const cy = oy + FIELD_H / 2 + fy;
@@ -213,11 +217,12 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             g.fillStyle(0xc8102e, 1);
             g.fillCircle(cx, cy, 6);
           }
-          // Creases + redes.
+          // Redes dentro do rinque, sobre a linha do gol.
           const goalHalf = 62;
           const depth = 42;
+          const cx = ox + FIELD_W / 2;
           for (const side of [-1, 1] as const) {
-            const nx = side < 0 ? ox - depth : ox + FIELD_W;
+            const nx = side < 0 ? cx - 445 - depth : cx + 445;
             const ny = oy + FIELD_H / 2 - goalHalf;
             g.fillStyle(0xffffff, 0.75);
             g.fillRect(nx, ny, depth, goalHalf * 2);

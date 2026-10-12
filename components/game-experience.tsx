@@ -1,32 +1,30 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, Copy, Maximize2, Minimize2, RefreshCcw, Users } from "lucide-react";
+import { ArrowLeft, ArrowRight, Copy, Maximize2, Minimize2, RefreshCcw, Users, Volume2, VolumeX } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { applyGoal, createBotGame, createOnlineGame, drawGame, pointerToField, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameActor, type GameInput, type GameObject, type GameSnapshot } from "@/lib/game-engine";
+import { applyGoal, createBotGame, createOnlineGame, drawGame, goalMouth, pointerToField, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameActor, type GameInput, type GameObject, type GameSnapshot } from "@/lib/game-engine";
 import type { GameId, GameRoom, GameTeam } from "@/lib/games";
-import { isVersionedEvent, REALTIME_VERSION, type RealtimeClientEvent } from "@/lib/realtime";
+import { gameAudio } from "@/lib/game-audio";
 import { usePhaserEngine } from "@/lib/game-server";
-import { GeckosRoomTransport } from "@/lib/geckos-room";
-import { useAblyRoom, type RealtimeStatus } from "@/lib/use-ably-room";
+import { GeckosRoomTransport, LAN_URL_KEY } from "@/lib/geckos-room";
 
 const PhaserGame = dynamic(() => import("@/components/phaser-game").then((module) => module.PhaserGame), { ssr: false });
 
 const labels = { haxball: "Haxball", hoquei: "Hóquei" };
 const descriptions = {
-  haxball: "Futebol de arena com chute carregado, movimentação e até cinco jogadores por equipe.",
+  haxball: "Futebol de arena veloz com até cinco jogadores por equipe e chute no clique.",
   hoquei: "Hóquei de mesa em uma partida rápida de sete gols. Um jogador por equipe.",
 };
 
-const connLabels: Record<Exclude<RealtimeStatus, "idle">, string> = {
-  connecting: "Conectando ao tempo real…",
-  connected: "Tempo real ativo",
-  disconnected: "Reconectando à sala…",
-  suspended: "Conexão instável — tentando de novo…",
-  failed: "Tempo real indisponível — modo compatibilidade (HTTP)",
-  fallback: "Modo compatibilidade (HTTP)",
-};
+const transportText = (udp: boolean, lan: boolean) => (!udp ? "HTTP (sondagem)" : lan ? "LAN ativa" : "UDP ativo");
+
+/** Nomes de exibição por jogo: azul contra vermelho no gelo. */
+const teamName = (game: GameId, team: GameTeam) =>
+  game === "hoquei" ? (team === "blue" ? "azul" : "vermelha") : (team === "blue" ? "branca" : "laranja");
+const teamNameCap = (game: GameId, team: GameTeam) =>
+  game === "hoquei" ? (team === "blue" ? "Azul" : "Vermelha") : (team === "blue" ? "Branca" : "Laranja");
 
 type RoomResponse = { room: GameRoom; playerId?: string; ownerToken?: string; player?: { id: string; team: GameTeam } };
 
@@ -61,13 +59,18 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const lastGoalCountRef = useRef(0);
   const hudScoreRef = useRef({ blue: 0, orange: 0 });
   const goalUntilRef = useRef(0);
-  // Replay do gol: play → net (1s bola na rede) → replay → board (placar).
-  const phaseRef = useRef<"play" | "net" | "replay" | "board">("play");
+  // Replay do gol: play → board (placar 1,8s) → replay → play.
+  const phaseRef = useRef<"play" | "board" | "replay">("play");
   const pendingGoalRef = useRef<{ team: GameTeam } | null>(null);
-  const netUntilRef = useRef(0);
-  const bufferRef = useRef<Array<{ players: GameActor[]; ball: GameObject }>>([]);
-  const replayRef = useRef<{ frames: Array<{ players: GameActor[]; ball: GameObject }>; index: number } | null>(null);
-  
+  const boardUntilRef = useRef(0);
+  const bufferRef = useRef<Array<{ t: number; players: GameActor[]; ball: GameObject }>>([]);
+  const replayRef = useRef<{ frames: Array<{ t: number; players: GameActor[]; ball: GameObject }>; startT: number; duration: number; index: number } | null>(null);
+  const replayTRef = useRef(0);
+  const prevBallRef = useRef({ x: 0, y: 0, vx: 0, vy: 0 });
+  const postSfxAtRef = useRef(0);
+  // Degradação automática de qualidade quando o render não acompanha.
+  const qualityRef = useRef({ scale: 1, slow: 0, fast: 0 });
+
   const [hud, setHud] = useState({ blue: 0, orange: 0, elapsed: 0, winner: null as GameTeam | null });
   const [goalNotice, setGoalNotice] = useState<{ team: GameTeam; blue: number; orange: number; id: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -75,14 +78,12 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const [metrics, setMetrics] = useState({ ping: 0, fps: 60, sim: 60 });
   const [udpLive, setUdpLive] = useState(false);
   const [replayBadge, setReplayBadge] = useState(false);
+  const [muted, setMuted] = useState(() => gameAudio.isMuted());
   const pingRef = useRef(0);
   const fpsRef = useRef(60);
-  const transportRef = useRef<RealtimeStatus>("idle");
   const netStatsRef = useRef({ snapshots: 0, inputSends: 0, snapshotSends: 0, driftMs: 0, lastDiag: 0 });
-  const deliveryRef = useRef(0);
   const lastInputPersistAtRef = useRef(0);
   const lastSnapshotPersistAtRef = useRef(0);
-  
   const roomId = room?.id ?? null;
   const roomStatus = room?.status;
   const isHost = mode === "online" && room?.ownerId === playerId && !!ownerToken;
@@ -113,22 +114,21 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
 
-  // Encerra o replay aplicando o placar (também usado pelo clique no selo).
-  const skipReplay = useCallback(() => {
-    const pending = pendingGoalRef.current;
+  // Encerra o replay e volta ao jogo (placar já aplicado antes do replay).
+  const finishReplay = useCallback(() => {
+    if (phaseRef.current !== "replay") return;
     replayRef.current = null;
-    setReplayBadge(false);
-    if (phaseRef.current !== "replay" || !pending) return;
-    applyGoal(stateRef.current, pending.team);
     pendingGoalRef.current = null;
-    phaseRef.current = "board";
+    setReplayBadge(false);
+    bufferRef.current = [];
+    phaseRef.current = "play";
   }, []);
 
-  // Chute sem mira: encostou na bola (41px) + clique/Espaço = chute de
+  // Chute sem mira: encostou na bola (38px) + clique/Espaço = chute de
   // potência fixa na direção em que a bola está, com leve antecipação.
   const triggerKick = useCallback(() => {
     if (phaseRef.current === "replay") {
-      skipReplay();
+      finishReplay();
       return;
     }
     const snapshot = stateRef.current;
@@ -138,19 +138,20 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     if (!me || me.cooldown > 0) return;
     const dx = snapshot.ball.x - me.x;
     const dy = snapshot.ball.y - me.y;
-    if (dx * dx + dy * dy > 41 * 41) return;
+    if (dx * dx + dy * dy > 38 * 38) return;
     inputRef.current.aimX = snapshot.ball.x + snapshot.ball.vx * 0.1;
     inputRef.current.aimY = snapshot.ball.y + snapshot.ball.vy * 0.1;
     inputRef.current.power = 0.62;
     inputRef.current.kickSpin = false;
     inputRef.current.kickSeq += 1;
-  }, [skipReplay, mode, playerId]);
+  }, [finishReplay, mode, playerId]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const onDown = (event: KeyboardEvent) => {
       if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyF", "KeyQ", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"].includes(event.code)) {
+        gameAudio.ensure();
         if (document.activeElement === canvas) event.preventDefault();
         const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement;
         const onCanvas = document.activeElement === canvas;
@@ -184,7 +185,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     const resize = () => {
       const bounds = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5) * qualityRef.current.scale;
       canvas.width = Math.max(1, Math.round(bounds.width * dpr));
       canvas.height = Math.max(1, Math.round(bounds.height * dpr));
     };
@@ -208,6 +209,32 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         const fps = Math.round((fpsFrames * 1000) / window);
         const sim = Math.round((simSteps * 1000) / window);
         fpsRef.current = fps;
+        // Degradação automática: 3 janelas lentas reduzem o render para 65%
+        // (o CSS estica de volta); 6 janelas boas restauram 100%.
+        const quality = qualityRef.current;
+        if (fps < 40) {
+          quality.slow += 1;
+          quality.fast = 0;
+        } else if (fps > 55) {
+          quality.fast += 1;
+          quality.slow = 0;
+        } else {
+          quality.slow = 0;
+          quality.fast = 0;
+        }
+        if (quality.slow >= 3 && quality.scale > 0.65) {
+          quality.scale = 0.65;
+          quality.slow = 0;
+          quality.fast = 0;
+          resize();
+          console.info("[Perf] FPS baixo: render em 65% até recuperar.");
+        } else if (quality.fast >= 6 && quality.scale < 1) {
+          quality.scale = 1;
+          quality.slow = 0;
+          quality.fast = 0;
+          resize();
+          console.info("[Perf] FPS recuperado: render em 100%.");
+        }
         // Flush único a cada 500ms: evita re-render por medição de rede.
         setMetrics({ ping: pingRef.current, fps, sim });
         fpsFrames = 0;
@@ -226,12 +253,24 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       // Replay local só para quem simula com autoridade (bot + host); o
       // convidado assiste ao gol pelo snapshot e mantém o placar antigo.
       const canReplay = mode === "bot" || host;
-      const deadBall = phaseRef.current === "net" || phaseRef.current === "replay";
+      const deadBall = phaseRef.current === "board" || phaseRef.current === "replay";
       const fireGoal = (team: GameTeam) => {
         if (!canReplay || phaseRef.current !== "play") return;
+        // Placar primeiro: aplica o gol na hora e mostra o GOOOL por 1,8s.
+        // O replay vem depois, com o gelo estendido para o reset cair no fim.
+        const st = stateRef.current;
+        const goalAt = st.elapsed;
+        applyGoal(st, team);
+        const kept = bufferRef.current.filter((frame) => frame.t >= goalAt - 4);
+        const usable = kept.length > 1 ? kept : bufferRef.current.slice(-30);
+        const span = usable.length > 1 ? usable[usable.length - 1].t - usable[0].t : 1;
+        const duration = Math.max(1, Math.min(5, span));
+        st.freeze = Math.max(st.freeze, 1.9 + duration);
         pendingGoalRef.current = { team };
-        phaseRef.current = "net";
-        netUntilRef.current = now + 1000;
+        replayRef.current = { frames: usable, startT: usable[0]?.t ?? goalAt, duration, index: 0 };
+        replayTRef.current = 0;
+        phaseRef.current = "board";
+        boardUntilRef.current = now + 1800;
       };
       const stepOptions = { authoritative, deferGoal: canReplay, onGoal: fireGoal };
 
@@ -259,43 +298,75 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       simSteps += steps;
 
       const localId = mode === "bot" ? "local" : (playerId ?? "");
+      const hideNames = qualityRef.current.scale < 1;
 
-      // Anel do replay: guarda os últimos ~5s de frames (só fora do replay).
-      if (phaseRef.current === "play" || phaseRef.current === "net") {
+      // Anel do replay: guarda os últimos ~12s com carimbo de tempo da sim.
+      // O carimbo garante 1x na reprodução em qualquer taxa de quadros.
+      if (phaseRef.current === "play") {
         const snapshot = stateRef.current;
         bufferRef.current.push({
+          t: snapshot.elapsed,
           players: snapshot.players.map((actor) => ({ ...actor })),
           ball: { ...snapshot.ball },
         });
-        if (bufferRef.current.length > 300) bufferRef.current.shift();
+        while (bufferRef.current.length > 720
+          || (bufferRef.current.length > 60 && bufferRef.current[0].t < snapshot.elapsed - 12)) {
+          bufferRef.current.shift();
+        }
       }
 
-      // Rede por 1s → replay do lance → placar.
-      if (phaseRef.current === "net" && pendingGoalRef.current && now >= netUntilRef.current) {
-        const frames = bufferRef.current;
-        if (frames.length >= 40) {
-          replayRef.current = { frames: frames.slice(Math.max(0, frames.length - 165)), index: 0 };
-          phaseRef.current = "replay";
-          setReplayBadge(true);
-        } else {
-          applyGoal(stateRef.current, pendingGoalRef.current.team);
-          pendingGoalRef.current = null;
-          phaseRef.current = "board";
-        }
+      // Placar por 1,8s, depois o replay em velocidade real, depois o jogo.
+      if (phaseRef.current === "board" && now >= boardUntilRef.current && replayRef.current) {
+        phaseRef.current = "replay";
+        replayTRef.current = 0;
+        setReplayBadge(true);
       }
 
       if (phaseRef.current === "replay" && replayRef.current) {
         const replay = replayRef.current;
-        replay.index += dt * 60;
-        if (replay.index >= replay.frames.length) {
-          skipReplay();
-          drawGame(ctx, stateRef.current, localId);
+        replayTRef.current += dt;
+        const target = replay.startT + replayTRef.current;
+        while (replay.index < replay.frames.length - 1 && replay.frames[replay.index + 1].t <= target) {
+          replay.index += 1;
+        }
+        if (replayTRef.current >= replay.duration) {
+          finishReplay();
+          drawGame(ctx, stateRef.current, localId, { hideNames });
         } else {
-          const frame = replay.frames[Math.floor(replay.index)];
-          drawGame(ctx, { ...stateRef.current, players: frame.players, ball: frame.ball }, localId);
+          const frame = replay.frames[replay.index];
+          drawGame(ctx, { ...stateRef.current, players: frame.players, ball: frame.ball }, localId, { hideNames });
         }
       } else {
-        drawGame(ctx, stateRef.current, localId);
+        drawGame(ctx, stateRef.current, localId, { hideNames });
+      }
+
+      // Áudio: chute (salto de velocidade), parede (inversão) e trave.
+      {
+        const ball = stateRef.current.ball;
+        const prev = prevBallRef.current;
+        const prevSpeed = Math.sqrt(prev.vx * prev.vx + prev.vy * prev.vy);
+        const curSpeed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+        if (curSpeed - prevSpeed > 250) {
+          gameAudio.play("kick", curSpeed / 700);
+        } else if (curSpeed > 120 && ((prev.vx > 0) !== (ball.vx > 0) || (prev.vy > 0) !== (ball.vy > 0))) {
+          gameAudio.play("wall", curSpeed / 800);
+        }
+        if (curSpeed > 180 && now - postSfxAtRef.current > 400) {
+          const hw = stateRef.current.field.w / 2;
+          const mouth = goalMouth(stateRef.current.game, hw);
+          const postHalf = stateRef.current.game === "haxball" ? 85 : 62;
+          for (const px of [-mouth, mouth]) {
+            for (const py of [-postHalf, postHalf]) {
+              const pdx = ball.x - px;
+              const pdy = ball.y - py;
+              if (pdx * pdx + pdy * pdy < 30 * 30) {
+                postSfxAtRef.current = now;
+                gameAudio.play("post", 1);
+              }
+            }
+          }
+        }
+        prevBallRef.current = { x: ball.x, y: ball.y, vx: ball.vx, vy: ball.vy };
       }
 
       const scores = stateRef.current.score;
@@ -315,6 +386,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
           const team = scores.blue > hudScoreRef.current.blue ? "blue" : "orange";
           goalUntilRef.current = now + 1600;
           setGoalNotice({ team, blue: scores.blue, orange: scores.orange, id: totalGoals });
+          gameAudio.play("goal", 1);
         }
       }
       hudScoreRef.current = { blue: scores.blue, orange: scores.orange };
@@ -322,11 +394,6 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       if (goalUntilRef.current > 0 && now >= goalUntilRef.current) {
         goalUntilRef.current = 0;
         setGoalNotice(null);
-        // Placar exibido: volta ao jogo e limpa o anel para o próximo gol.
-        if (phaseRef.current === "board") {
-          phaseRef.current = "play";
-          bufferRef.current = [];
-        }
       }
 
       if (now - hudTime > 180) {
@@ -340,9 +407,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     frame = requestAnimationFrame(run);
     return () => { cancelAnimationFrame(frame); observer.disconnect(); };
-  }, [game, mode, playerId, ownerToken, skipReplay]);
-
-  const lastResyncRef = useRef(0);
+  }, [game, mode, playerId, ownerToken, finishReplay]);
 
   const acceptTarget = useCallback((snapshot: GameSnapshot, hard = false) => {
     const current = targetRef.current;
@@ -404,104 +469,11 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     }
   }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate, acceptTarget]);
 
-  const requestResync = useCallback((force = false) => {
-    const now = Date.now();
-    if (!force && now - lastResyncRef.current < 1500) return;
-    lastResyncRef.current = now;
-    console.log(`[Sync] Requesting resync (force=${force})`);
-    void resync(force);
-  }, [resync]);
+  // Sem canal push, a sala chega pelo UDP (jogo) e pela sondagem HTTP
+  // (lobby e fallback): resync periódico + heartbeat cobrem elenco e status.
 
-  const handleRealtimeEvent = useCallback((event: RealtimeClientEvent) => {
-    if (event.type === "resync") {
-      console.log(`[Realtime] Resync triggered:`, event.reason);
-      requestResync(true);
-      return;
-    }
-
-    const data = event.data;
-    if (!isVersionedEvent(data)) {
-      console.warn(`[Realtime] Unknown event version, requesting resync`);
-      requestResync();
-      return;
-    }
-
-    const currentRoom = roomRef.current;
-    const host = currentRoom?.ownerId === playerId && !!ownerToken;
-    // `fromClientId` é atribuído pelo Ably ao publicador (o token é amarrado
-    // ao playerId, então não é forjável); `null` identifica eventos vindos do
-    // servidor pela API REST, que são confiáveis por definição.
-    const fromClientId = event.fromClientId;
-
-    switch (event.name) {
-      case "game-snapshot-updated": {
-        if (typeof data.sentAt === "number") deliveryRef.current = Date.now() - data.sentAt;
-        // Snapshots valem apenas vindos do host: na publicação direta o
-        // clientId tem que ser o dono da sala (um convidado malicioso não
-        // pode plantar snapshot falsa) e no caminho HTTP o servidor já
-        // validou o ownerToken antes de republicar.
-        const trustedSource = fromClientId === null || fromClientId === currentRoom?.ownerId;
-        // Alvo da reconciliação — nunca adoção dura. Substituir o estado local
-        // inteiro a cada snapshot faz o convidado enxergar uma posição de
-        // ~100–250 ms atrás (publicação + entrega) e sentir o jogo travando.
-        if (trustedSource && !host && data.playerId !== playerId && currentRoom?.status === "playing" && data.snapshot) {
-          netStatsRef.current.snapshots += 1;
-          acceptTarget(data.snapshot);
-        }
-        break;
-      }
-      case "game-input-updated": {
-        if (typeof data.sentAt === "number") deliveryRef.current = Date.now() - data.sentAt;
-        // A autoria do input vem do clientId atribuído pelo Ably; no caminho
-        // de compatibilidade (publicado pelo servidor, sem clientId), cai
-        // para o playerId do payload validado na rota HTTP.
-        const authorId = fromClientId ?? data.playerId;
-        if (authorId && data.input) {
-          remoteInputsRef.current[authorId] = data.input;
-        }
-        break;
-      }
-      case "game-state-updated":
-      case "player-joined":
-      case "player-left": {
-        // Eventos de sala só nascem no servidor. Com publish concedido aos
-        // jogadores, um cliente poderia forjar entrada/saída — ignorados.
-        if (fromClientId !== null) break;
-        if (data.room) {
-          roomRef.current = data.room;
-          onRoomUpdate(data.room);
-        } else {
-          requestResync();
-        }
-        break;
-      }
-      case "game-ended":
-        if (fromClientId !== null) break;
-        console.log(`[Room] Game ended`);
-        onRoomUpdate(null);
-        break;
-    }
-  }, [playerId, ownerToken, onRoomUpdate, requestResync, acceptTarget]);
-
-  const { status: realtimeStatus, publish: publishRealtime } = useAblyRoom({
-    roomId: mode === "online" ? roomId : null,
-    game,
-    playerId: mode === "online" ? playerId : null,
-    onEvent: handleRealtimeEvent,
-  });
-  const realtimeLive = realtimeStatus === "connected";
-
-  // Diagnóstico de transporte: deixa claro no console se o fluxo usa o canal
-  // Ably ou caiu para o polling HTTP (que tem mais latência).
-  useEffect(() => {
-    transportRef.current = realtimeStatus;
-    if (realtimeStatus === "connected") console.info("[Net] Tempo real via Ably ativo — eventos do canal da sala em uso.");
-    else if (realtimeStatus === "fallback") console.info("[Net] Ably indisponível — sincronização por polling HTTP (mais lag).");
-  }, [realtimeStatus]);
-
-  // Via rápida UDP (geckos.io/Render) para inputs/snapshots. O HTTP/Ably
-  // continua persistindo tudo no Redis — o UDP só acelera a entrega.
-  // Sem servidor configurado (ou durante o cold start), segue só no Ably/HTTP.
+  // Via rápida UDP (geckos.io no Render ou na LAN) para inputs/snapshots. O
+  // HTTP continua persistindo tudo no Redis. Sem servidor, segue só no HTTP.
   useEffect(() => {
     if (mode !== "online" || !roomId || !playerId || !GeckosRoomTransport.available()) return;
     const transport = new GeckosRoomTransport();
@@ -515,7 +487,10 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       transport.onSnapshot((snapshot) => {
         const current = roomRef.current;
         const host = current?.ownerId === playerId;
-        if (!host && current?.status === "playing") acceptTarget(snapshot);
+        if (!host && current?.status === "playing") {
+          netStatsRef.current.snapshots += 1;
+          acceptTarget(snapshot);
+        }
       });
       transport.onInput((id, remoteInput) => {
         remoteInputsRef.current[id] = remoteInput;
@@ -537,17 +512,14 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     let inputInFlight = 0;
     let snapshotInFlight = 0;
     let lastInputJson: string | null = null;
-    // Cadência fixa de 50ms, independente da latência. Cada transmissão leva o
-    // estado mais recente e a próxima sai 50ms depois, mesmo com a anterior em
-    // voo — antes, esperar a resposta (300–400ms em serverless) limitava o
-    // fluxo inteiro a ~2 envios por segundo, que era o lag sentido por todos.
+    // Cadência fixa de 50ms, independente da latência. Cada transmissão leva
+    // o estado mais recente e a próxima sai 50ms depois, mesmo com a anterior
+    // em voo. Antes, esperar a resposta limitava o fluxo a ~2 envios/s.
     const TICK_MS = 50;
     const MAX_IN_FLIGHT = 3;
-    // Com o tempo real ativo, inputs e snapshots trafegam direto pelo
-    // websocket do Ably (sem POST → Redis → Ably no caminho, que custava
-    // ~300–400ms por evento); o POST fica só como persistência lenta para o
-    // Redis, que alimenta o resync de quem entra/reconecta e o polling de
-    // quem está no modo compatibilidade.
+    // Com UDP ativo, inputs e snapshots vão direto (sem POST no caminho
+    // quente); o POST fica como persistência para o Redis, que alimenta o
+    // resync de quem entra ou reconecta e a sondagem de quem está sem UDP.
     const PERSIST_INPUT_MS = 250;
     const PERSIST_SNAPSHOT_MS = 300;
 
@@ -580,49 +552,35 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       const now = performance.now();
       const currentRoom = roomRef.current;
       const host = currentRoom?.ownerId === playerId && !!ownerToken;
-      const live = transportRef.current === "connected";
       const playing = currentRoom?.status === "playing";
       const udp = geckosRef.current;
       const udpConnected = !!udp && udp.status === "connected";
       const stats = netStatsRef.current;
-      const sentAt = Date.now();
 
       // Input: só sai quando muda de fato (virar, correr, carregar o chute),
       // o que elimina o tráfego de um jogador parado.
       const inputJson = JSON.stringify(inputRef.current);
       const inputChanged = inputJson !== lastInputJson;
+      // Input: via rápida UDP ao mudar; HTTP como transporte (sondagem) e
+      // persistência quando sem UDP.
       if (inputChanged) {
         lastInputJson = inputJson;
-        if (live) {
-          // Caminho quente: direto no canal. O Ably atribui o clientId do
-          // token a mensagem, provando a autoria para os demais jogadores.
-          stats.inputSends += 1;
-          publishRealtime("game-input-updated", { v: REALTIME_VERSION, playerId, input: { ...inputRef.current }, sentAt });
-        }
-        // Via rápida UDP (fire-and-forget): chega antes do POST/Ably quando o
-        // Render está acordado; a persistência continua no HTTP abaixo.
-        if (udpConnected) udp.sendInput(playerId, { ...inputRef.current });
-      }
-      if (live) {
-        // Persistência lenta: sem `notify` o servidor só grava no Redis, sem
-        // republicar no canal — senão o destinatário receberia uma versão
-        // defasada do input ~300ms depois (regressão de movimento).
-        if (now - lastInputPersistAtRef.current >= PERSIST_INPUT_MS && inputInFlight < 1) {
-          inputInFlight += 1;
-          lastInputPersistAtRef.current = now;
-          void post({ game, playerId, action: "input", input: { ...inputRef.current }, notify: false }).finally(() => { inputInFlight -= 1; });
-        }
-      } else if (inputChanged && inputInFlight < MAX_IN_FLIGHT) {
-        // Compatibilidade: sem Ably, o POST continua sendo o transporte e o
-        // servidor republica o input no canal para os demais.
-        inputInFlight += 1;
         stats.inputSends += 1;
+        if (udpConnected) udp.sendInput(playerId, { ...inputRef.current });
+        else if (inputInFlight < MAX_IN_FLIGHT) {
+          inputInFlight += 1;
+          void post({ game, playerId, action: "input", input: { ...inputRef.current } }).finally(() => { inputInFlight -= 1; });
+        }
+      }
+      if (udpConnected && now - lastInputPersistAtRef.current >= PERSIST_INPUT_MS && inputInFlight < 1) {
+        inputInFlight += 1;
+        lastInputPersistAtRef.current = now;
         void post({ game, playerId, action: "input", input: { ...inputRef.current } }).finally(() => { inputInFlight -= 1; });
       }
 
       // Snapshot: o host publica o estado autoritativo no mesmo ritmo. Cópia
-      // rasa por nível — a simulação muta `stateRef.current` a cada frame e a
-      // codificação da mensagem pode ocorrer depois do return do publish.
+      // rasa por nível, pois a simulação muta `stateRef.current` a cada frame
+      // e a codificação da mensagem pode ocorrer depois do envio.
       if (host && playing) {
         const snapshotCopy: GameSnapshot = {
           ...stateRef.current,
@@ -630,33 +588,30 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
           ball: { ...stateRef.current.ball },
           score: { ...stateRef.current.score },
         };
+        stats.snapshotSends += 1;
         if (udpConnected) {
-          // Snapshot do host via UDP a ~10 Hz (tick de 50ms, um sim um não);
-          // o Ably/HTTP abaixo continua como transporte principal/persistência.
+          // Snapshot do host via UDP a ~10 Hz (tick de 50ms, um sim um não).
           udpSnapTickRef.current += 1;
           if (udpSnapTickRef.current % 2 === 0) udp.sendSnapshot(snapshotCopy);
         }
-        if (live) {
-          stats.snapshotSends += 1;
-          publishRealtime("game-snapshot-updated", { v: REALTIME_VERSION, playerId, snapshot: snapshotCopy, sentAt });
+        if (udpConnected) {
           if (now - lastSnapshotPersistAtRef.current >= PERSIST_SNAPSHOT_MS && snapshotInFlight < 1) {
             snapshotInFlight += 1;
             lastSnapshotPersistAtRef.current = now;
-            void post({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current, notify: false }).finally(() => { snapshotInFlight -= 1; });
+            void post({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current }).finally(() => { snapshotInFlight -= 1; });
           }
         } else if (snapshotInFlight < MAX_IN_FLIGHT) {
           snapshotInFlight += 1;
-          stats.snapshotSends += 1;
           void post({ game, playerId, ownerToken, action: "snapshot", snapshot: stateRef.current }).finally(() => { snapshotInFlight -= 1; });
         }
       }
 
-      // Resumo de rede a cada ~2s: escrita, entrega Ably, taxas e atraso de sync.
+      // Resumo de rede a cada ~2s: escrita, taxas e atraso de sync.
       if (stats.lastDiag === 0) stats.lastDiag = now;
       const diagWindow = now - stats.lastDiag;
       if (diagWindow >= 2000) {
-        const via = udpConnected ? "udp" : transportRef.current === "connected" ? "ably" : `http (${transportRef.current})`;
-        console.info(`[Net] sala=${roomId} via=${via} post=${pingRef.current}ms entrega=${deliveryRef.current}ms fps=${Math.round(fpsRef.current)} inputs=${Math.round((stats.inputSends * 1000) / diagWindow)}/s publicados=${Math.round((stats.snapshotSends * 1000) / diagWindow)}/s recebidos=${Math.round((stats.snapshots * 1000) / diagWindow)}/s atraso=${stats.driftMs}ms host=${host ? "sim" : "não"}`);
+        const via = udpConnected ? (udp && udp.lan ? "lan" : "udp") : "http";
+        console.info(`[Net] sala=${roomId} via=${via} post=${pingRef.current}ms fps=${Math.round(fpsRef.current)} inputs=${Math.round((stats.inputSends * 1000) / diagWindow)}/s publicados=${Math.round((stats.snapshotSends * 1000) / diagWindow)}/s recebidos=${Math.round((stats.snapshots * 1000) / diagWindow)}/s atraso=${stats.driftMs}ms host=${host ? "sim" : "não"}`);
         stats.inputSends = 0;
         stats.snapshotSends = 0;
         stats.snapshots = 0;
@@ -668,10 +623,12 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     tick();
     return () => { active = false; clearTimeout(timer); };
-  }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate, publishRealtime]);
+  }, [game, mode, roomId, playerId, ownerToken, onRoomUpdate]);
 
+  // Sondagem de leitura: ativa somente sem UDP (fallback). Com UDP, o jogo
+  // chega pelo transporte rápido e o resync cobre entradas e reconexões.
   useEffect(() => {
-    if (mode !== "online" || !roomId || !playerId || realtimeLive) return;
+    if (mode !== "online" || !roomId || !playerId || udpLive) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
 
@@ -683,7 +640,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     void read();
     return () => { active = false; clearTimeout(timer); };
-  }, [game, mode, roomId, playerId, realtimeLive, resync]);
+  }, [game, mode, roomId, playerId, udpLive, resync]);
 
   const updateAim = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -695,8 +652,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     event.currentTarget.focus();
+    gameAudio.ensure();
     if (phaseRef.current === "replay") {
-      skipReplay();
+      finishReplay();
       return;
     }
     if (game !== "haxball" || event.button !== 0) return;
@@ -718,33 +676,38 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const pingTone = metrics.ping < 80 ? "ok" : metrics.ping < 180 ? "mid" : "bad";
   const fpsTone = metrics.fps > 55 ? "ok" : metrics.fps > 35 ? "mid" : "bad";
   const simTone = metrics.sim >= 55 ? "ok" : "bad";
+  const lan = GeckosRoomTransport.isLan();
+  const homeDot = game === "hoquei" ? "blue" : "white";
+  const awayDot = game === "hoquei" ? "red" : "orange";
   return (
     <div ref={boardRef} className="game-board-wrap">
       <div className="game-board-hud">
-        <div><span className="score-dot white" /> Branco <strong>{hud.blue}</strong></div>
+        <div><span className={`score-dot ${homeDot}`} /> {teamNameCap(game, "blue")} <strong>{hud.blue}</strong></div>
         <span className="game-timer">{time}</span>
-        <div><strong>{hud.orange}</strong> Laranja <span className="score-dot orange" /></div>
-        <button type="button" className="game-fullscreen-button" onClick={() => void toggleFullscreen()} aria-label={isFullscreen ? "Sair da tela cheia" : "Colocar jogo em tela cheia"} title={isFullscreen ? "Sair da tela cheia" : "Colocar jogo em tela cheia"}>{isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
+        <div><strong>{hud.orange}</strong> {teamNameCap(game, "orange")} <span className={`score-dot ${awayDot}`} /></div>
+        <button type="button" className="game-fullscreen-button" onClick={() => void toggleFullscreen()} aria-label={isFullscreen ? "Sair da tela cheia" : "Colocar jogo em tela cheia"} title={isFullscreen ? "Sair da tela cheia" : "Tela cheia"}>{isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</button>
       </div>
 
       <div className="game-canvas-shell">
         <div className="game-net-hud" role="status" aria-label="Desempenho e conexão">
-          {mode === "online" && <span className="game-net-hud-mode">{realtimeStatus === "idle" ? "Preparando sala…" : connLabels[realtimeStatus]}</span>}
-          {mode === "online" && udpLive && <span className="game-net-hud-ok"><i aria-hidden="true" />UDP ativo</span>}
+          {mode === "online" && <span className="game-net-hud-mode">{!roomId || !playerId ? "Preparando sala…" : transportText(udpLive, lan)}</span>}
           {mode === "online" && <span className={`game-net-hud-${pingTone}`}><i aria-hidden="true" />ping {metrics.ping}ms</span>}
           <span className={`game-net-hud-${simTone}`}><i aria-hidden="true" />sim {metrics.sim}</span>
           <span className={`game-net-hud-${fpsTone}`}><i aria-hidden="true" />fps {metrics.fps}</span>
         </div>
-        {replayBadge && <button type="button" className="game-replay-badge" onClick={() => skipReplay()}><strong>Replay</strong> · clique para pular</button>}
+        {replayBadge && <button type="button" className="game-replay-badge" onClick={() => finishReplay()}><strong>Replay</strong> · clique para pular</button>}
 
         <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? ", clique ou Espaço para chutar" : ""}`} onPointerDown={onPointerDown} onPointerMove={updateAim} onPointerEnter={updateAim} onContextMenu={(event) => event.preventDefault()} />
         {mode === "online" && room?.status === "waiting" && <div className="game-waiting">{isHost ? "Convide jogadores e clique em Iniciar partida." : "Aguardando o dono iniciar a partida."}</div>}
-        {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong>{goalNotice.blue} <i>—</i> {goalNotice.orange}</strong><small>Equipe {goalNotice.team === "blue" ? "branca" : "laranja"}</small></div>}
-        {hud.winner && !goalNotice && <div className="game-waiting">Equipe {hud.winner === "blue" ? "branca" : "laranja"} venceu.</div>}
+        {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong>{goalNotice.blue} <i>·</i> {goalNotice.orange}</strong><small>Equipe {teamName(game, goalNotice.team)}</small></div>}
+        {hud.winner && !goalNotice && <div className="game-waiting">Equipe {teamName(game, hud.winner)} venceu.</div>}
       </div>
 
       <div className="game-board-footer">
         <span>WASD ou setas: mover {game === "haxball" ? " · Clique ou Espaço: chute · Shift: correr · Q: dash para o cursor" : " · Empurre o disco para marcar gols"}</span>
+        <span className="game-board-footer-right">
+          <button type="button" onClick={() => { const next = !muted; gameAudio.setMuted(next); setMuted(next); if (!next) gameAudio.ensure(); }} aria-label={muted ? "Ativar som" : "Silenciar"} title={muted ? "Ativar som" : "Silenciar"}>{muted ? <VolumeX size={15} /> : <Volume2 size={15} />} {muted ? "Mudo" : "Som"}</button>
+        </span>
         {networkError && <p className="game-error" role="status">{networkError}</p>}
       </div>
     </div>
@@ -764,6 +727,22 @@ export function GameExperience({ game }: { game: GameId }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const phaser = usePhaserEngine();
+  const [lanUrl, setLanUrl] = useState(() => {
+    if (typeof window === "undefined") return "";
+    try {
+      return window.localStorage.getItem(LAN_URL_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [lanSaved, setLanSaved] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return (window.localStorage.getItem(LAN_URL_KEY) ?? "").length > 0;
+    } catch {
+      return false;
+    }
+  });
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("room")?.toUpperCase() ?? "";
@@ -808,6 +787,7 @@ export function GameExperience({ game }: { game: GameId }) {
   }, [mode, room, loadRooms]);
 
   const activeRoomId = room?.id;
+  const waitingLobby = room?.status === "waiting";
   useEffect(() => {
     if (!activeRoomId || !playerId) return;
     const interval = setInterval(async () => {
@@ -818,9 +798,24 @@ export function GameExperience({ game }: { game: GameId }) {
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Sala desconectada.");
       }
-    }, 8000);
+    }, 4000);
     return () => clearInterval(interval);
   }, [game, activeRoomId, playerId]);
+
+  // Lobby rápido: sem canal push, o elenco e o início chegam por sondagem.
+  useEffect(() => {
+    if (!activeRoomId || !playerId || !waitingLobby) return;
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/games/rooms/${activeRoomId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId, action: "heartbeat" }) });
+        const data = await readResponse<RoomResponse>(response);
+        setRoom(data.room);
+      } catch {
+        // o heartbeat principal trata a queda
+      }
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [game, activeRoomId, playerId, waitingLobby]);
 
   const createRoom = async () => {
     if (name.trim().length < 2) { setError("Informe um nome com pelo menos dois caracteres."); return; }
@@ -915,12 +910,12 @@ export function GameExperience({ game }: { game: GameId }) {
           </div>
           {game === "haxball" && (
             <div className="bot-counts">
-              <label>Aliados (0–4)
+              <label>Aliados (0 a 4)
                 <select value={bots.blue} onChange={(event) => setBots((value) => ({ ...value, blue: Number(event.target.value) }))}>
                   {Array.from({ length: 5 }, (_, index) => <option key={index} value={index}>{index}</option>)}
                 </select>
               </label>
-              <label>Adversários (1–5)
+              <label>Adversários (1 a 5)
                 <select value={bots.orange} onChange={(event) => setBots((value) => ({ ...value, orange: Number(event.target.value) }))}>
                   {Array.from({ length: 5 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1}</option>)}
                 </select>
@@ -944,8 +939,8 @@ export function GameExperience({ game }: { game: GameId }) {
                   </label>
                   <label>Equipe ao entrar
                     <select value={team} onChange={(event) => setTeam(event.target.value as GameTeam)}>
-                      <option value="blue">Branca</option>
-                      <option value="orange">Laranja</option>
+                      <option value="blue">{teamNameCap(game, "blue")}</option>
+                      <option value="orange">{teamNameCap(game, "orange")}</option>
                     </select>
                   </label>
                   <button type="button" className="game-primary-button" disabled={busy || name.trim().length < 2} onClick={() => void createRoom()}>Criar sala <ArrowRight size={15} /></button>
@@ -957,6 +952,19 @@ export function GameExperience({ game }: { game: GameId }) {
                   <input value={roomCode} maxLength={8} onChange={(event) => setRoomCode(event.target.value.toUpperCase())} placeholder="XXXXXXXX" />
                 </label>
                 <button type="button" className="button" onClick={() => { if (roomCode) void joinRoom(roomCode); }}>Entrar</button>
+              </div>
+
+              <div className="game-room-lan">
+                <div>
+                  <span className="game-overline">Rede local (LAN)</span>
+                  <p>Sem internet: rode o servidor na sua máquina (<code>cd game-server e npm run dev</code>) e informe o endereço aqui nos aparelhos da mesma rede.</p>
+                </div>
+                <label>Servidor LAN
+                  <input value={lanUrl} onChange={(event) => setLanUrl(event.target.value)} placeholder="http://192.168.0.10:9208" inputMode="url" />
+                </label>
+                {lanSaved
+                  ? <button type="button" onClick={() => { try { window.localStorage.removeItem(LAN_URL_KEY); } catch { /* sem storage */ } setLanUrl(""); setLanSaved(false); }}>Usar online</button>
+                  : <button type="button" disabled={!/^https?:\/\/.+/.test(lanUrl.trim())} onClick={() => { try { window.localStorage.setItem(LAN_URL_KEY, lanUrl.trim().replace(/\/$/, "")); } catch { /* sem storage */ } setLanSaved(true); }}>Usar LAN</button>}
               </div>
 
               <div className="game-room-list-head">
@@ -993,13 +1001,13 @@ export function GameExperience({ game }: { game: GameId }) {
 
               <div className="game-roster">
                 <div>
-                  <strong>Equipe branca</strong>
+                  <strong>Equipe {teamName(game, "blue")}</strong>
                   {room.players.filter((p) => p.team === "blue").map((p) => (
                     <span key={p.id}>{p.name}{p.id === playerId ? " (você)" : ""}</span>
                   ))}
                 </div>
                 <div>
-                  <strong>Equipe laranja</strong>
+                  <strong>Equipe {teamName(game, "orange")}</strong>
                   {room.players.filter((p) => p.team === "orange").map((p) => (
                     <span key={p.id}>{p.name}{p.id === playerId ? " (você)" : ""}</span>
                   ))}
@@ -1034,7 +1042,7 @@ export function GameExperience({ game }: { game: GameId }) {
 
       <div className="game-notes">
         <div><Users size={19} /><span>{game === "haxball" ? "Até cinco por equipe nas salas online" : "Um jogador por equipe nas salas online"}</span></div>
-        <p>Todos os jogadores preveem a partida localmente a 60 fps e convergem pelo estado autoritativo do criador da sala. O indicador no canto do campo mostra ping e FPS: verde estável, amarelo atento, vermelho instável.</p>
+        <p>Todos preveem a partida a 60 fps e convergem pelo estado autoritativo do criador da sala, via UDP, LAN ou HTTP. O indicador mostra ping, SIM (física) e FPS (render): verde estável, amarelo atento, vermelho instável.</p>
       </div>
     </main>
   );

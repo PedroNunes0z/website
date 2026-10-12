@@ -76,7 +76,7 @@ export function UniverseScene() {
   const hintId = useId();
 
   return (
-    <div className="universe-stage" ref={stageRef} role="group" tabIndex={0} aria-label="The Universe! — modelo 3D interativo de Stark" aria-describedby={hintId}>
+    <div className="universe-stage" ref={stageRef} role="group" tabIndex={0} aria-label="The Universe! · modelo 3D interativo de Stark" aria-describedby={hintId}>
       <div className="universe-glow" aria-hidden="true" />
       <Canvas
         dpr={[1, 1.5]}

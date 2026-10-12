@@ -3,6 +3,9 @@ import { getGameServerUrl } from "@/lib/game-server";
 
 export type GeckosStatus = "idle" | "connecting" | "connected" | "disconnected" | "unavailable";
 
+/** Chave do endereço LAN salvo pelo jogador no painel online. */
+export const LAN_URL_KEY = "pedro-games-lan-url";
+
 interface GeckosChannelLike {
   on(event: string, callback: (data?: unknown) => void): void;
   emit(event: string, data?: unknown): void;
@@ -10,32 +13,51 @@ interface GeckosChannelLike {
   id?: string;
 }
 
+function readLanUrl(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return (window.localStorage.getItem(LAN_URL_KEY) ?? "").replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Transporte UDP via geckos.io (@geckos.io/client) para inputs/snapshots.
  *
- * Modelo host-autoritativo (igual ao atual via HTTP/Ably):
- * - todo jogador emite `input` a ~60 Hz;
- * - o host emite `snapshot` a ~20 Hz;
- * - o servidor apenas retransmite para a sala e persiste o snapshot no Redis.
+ * Modelo host-autoritativo:
+ * - todo jogador emite `input` ao mudar;
+ * - o host emite `snapshot` a ~10 Hz;
+ * - o servidor apenas retransmite para a sala e espelha no Redis.
  *
- * Quando `NEXT_PUBLIC_GAME_SERVER_URL` não está configurada (ou o Render
- * ainda está acordando), `connect()` resolve `null` e o chamador mantém o
- * fluxo atual (Ably + polling HTTP) sem quebrar.
+ * Origem do servidor, nesta ordem: endereço LAN salvo pelo jogador, URL do
+ * Render (`NEXT_PUBLIC_GAME_SERVER_URL`). Sem nenhuma das duas, `connect()`
+ * resolve `null` e o jogo segue só no HTTP, sem quebrar.
  */
 export class GeckosRoomTransport {
   private channel: GeckosChannelLike | null = null;
   status: GeckosStatus = "idle";
+  lan = false;
+
+  static serverUrl(): string {
+    return readLanUrl() || getGameServerUrl();
+  }
 
   static available(): boolean {
-    return getGameServerUrl().length > 0;
+    return GeckosRoomTransport.serverUrl().length > 0;
+  }
+
+  static isLan(): boolean {
+    return readLanUrl().length > 0;
   }
 
   async connect(roomId: string, playerId: string): Promise<GeckosChannelLike | null> {
-    const url = getGameServerUrl();
+    const url = GeckosRoomTransport.serverUrl();
     if (!url) {
       this.status = "unavailable";
       return null;
     }
+    this.lan = readLanUrl().length > 0;
     this.status = "connecting";
     try {
       const { default: geckos } = await import("@geckos.io/client");
@@ -69,7 +91,7 @@ export class GeckosRoomTransport {
     try {
       this.channel?.emit("input", { playerId, input });
     } catch {
-      // UDP é fire-and-forget: o próximo tick corrige.
+      // UDP é fire-and-forget: a próxima mudança corrige.
     }
   }
 
@@ -78,7 +100,7 @@ export class GeckosRoomTransport {
     try {
       this.channel?.emit("snapshot", { snapshot });
     } catch {
-      // idem — o snapshot seguinte corrige.
+      // idem: o snapshot seguinte corrige.
     }
   }
 

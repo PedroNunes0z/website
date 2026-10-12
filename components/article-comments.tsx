@@ -153,7 +153,7 @@ export function ArticleComments({ slug }: { slug: string }) {
   const orphanReplies = data.comments.filter((comment) => comment.parentId && !data.comments.some((parent) => parent.id === comment.parentId));
 
   return <section className="comments-section shell" aria-labelledby="comments-heading">
-    <div className="comments-heading"><div><span className="section-kicker">Comunidade / 01</span><h2 id="comments-heading">Discussão<span>.</span></h2><p>Compartilhe sua perspectiva. Comentários e imagens passam por moderação automática antes de aparecer.</p></div><div className="comments-rating"><Star size={20} aria-hidden="true" /><strong>{data.rating.count ? data.rating.average.toFixed(1).replace(".", ",") : "—"}</strong><span>{data.rating.count} {data.rating.count === 1 ? "avaliação" : "avaliações"}</span></div></div>
+    <div className="comments-heading"><div><span className="section-kicker">Comunidade / 01</span><h2 id="comments-heading">Discussão<span>.</span></h2><p>Compartilhe sua perspectiva. Comentários e imagens passam por moderação automática antes de aparecer.</p></div><div className="comments-rating"><Star size={20} aria-hidden="true" /><strong>{data.rating.count ? data.rating.average.toFixed(1).replace(".", ",") : "·"}</strong><span>{data.rating.count} {data.rating.count === 1 ? "avaliação" : "avaliações"}</span></div></div>
     {error && <p className="comments-error" role="alert">{error}</p>}
     {!data.user ? <form className="comments-auth" onSubmit={authenticate}>
       <div className="comments-auth-intro"><MessageSquare size={20} /><h3>Entre para participar</h3><p>Crie uma conta simples ou acesse a sua. O e-mail não aparece publicamente.</p></div>

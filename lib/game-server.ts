@@ -3,7 +3,7 @@
  *
  * O serviço no Render hiberna após inatividade no plano gratuito. Quando o
  * usuário entra na aba de games, o cliente chama `GET /api/games/wake`, que
- * por sua vez acorda o Render via `/health` com retries — sem expor a URL
+ * por sua vez acorda o Render via `/health` com retries, sem expor a URL
  * interna nem travar a navegação.
  */
 

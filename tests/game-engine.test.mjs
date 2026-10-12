@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = await readFile(new URL("../lib/game-engine.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { createOnlineGame, createBotGame, botShotPower, resolveKickDirection, stepGame, applyGoal, reconcileAuthoritativeState } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { createOnlineGame, createBotGame, botShotPower, resolveKickDirection, stepGame, applyGoal, reconcileAuthoritativeState, FULL_FIELD } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 const roster = [
   { id: "white", name: "Branco", team: "blue", joinedAt: 0, lastSeen: 0 },
@@ -18,7 +18,7 @@ const input = (extra = {}) => ({
 });
 
 test("a estamina limita o sprint e regenera ao descansar", () => {
-  const state = createOnlineGame("haxball", roster);
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
   const kicks = {};
   for (let frame = 0; frame < 240; frame++) stepGame(state, { white: input({ x: 1, sprint: true }) }, kicks, 1 / 60);
   assert.ok(state.players[0].stamina < 10);
@@ -29,7 +29,7 @@ test("a estamina limita o sprint e regenera ao descansar", () => {
 });
 
 test("jogadores saem um pouco do campo, mas colidem entre si", () => {
-  const state = createOnlineGame("haxball", roster);
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
   state.ball.x = 300;
   state.ball.y = 180;
   state.players[0].x = -530;
@@ -44,28 +44,28 @@ test("jogadores saem um pouco do campo, mas colidem entre si", () => {
 });
 
 test("a bola rebate na parede e não deixa o campo pela lateral", () => {
-  const state = createOnlineGame("haxball", roster);
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
   state.ball.x = 0;
-  state.ball.y = -265;
+  state.ball.y = -267;
   state.ball.vy = -400;
   stepGame(state, {}, {}, 1 / 60);
-  assert.ok(state.ball.y >= -269);
+  assert.ok(state.ball.y >= -272);
   assert.ok(state.ball.vy > 0);
   state.ball.x = 486;
   state.ball.y = 180;
   state.ball.vx = 500;
   state.ball.vy = 0;
   stepGame(state, {}, {}, 1 / 60);
-  assert.ok(state.ball.x <= 489);
+  assert.ok(state.ball.x <= 492);
   state.ball.x = 496;
   state.ball.y = 180;
   state.ball.vx = 1000;
   stepGame(state, {}, {}, 1 / 60);
-  assert.ok(state.ball.x <= 489);
+  assert.ok(state.ball.x <= 492);
 });
 
 test("não chuta de costas; com F, o chute faz curva na direção da mira", () => {
-  const state = createOnlineGame("haxball", roster);
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
   const player = state.players[0];
   state.ball.x = player.x - 35;
   state.ball.y = player.y;
@@ -113,7 +113,7 @@ test("o bot do hóquei recua para defender a trajetória do disco", () => {
 });
 
 test("o dash segue o cursor, consome estamina e respeita o intervalo", () => {
-  const state = createOnlineGame("haxball", roster);
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
   const player = state.players[0];
   state.ball.x = 300; state.ball.y = 180;
   const before = player.x;
@@ -126,7 +126,7 @@ test("o dash segue o cursor, consome estamina e respeita o intervalo", () => {
 });
 
 test("a força dos bots varia e não usa potência máxima", () => {
-  const state = createBotGame("haxball", { blue: 0, orange: 1 });
+  const state = createBotGame("haxball", { blue: 0, orange: 1 }, FULL_FIELD);
   const bot = state.players[1];
   const first = botShotPower(bot, state);
   state.elapsed = 1.4;
@@ -137,18 +137,18 @@ test("a força dos bots varia e não usa potência máxima", () => {
 });
 
 test("haxball só conta gol quando a bola ultrapassa a linha inteira", () => {
-  const state = createOnlineGame("haxball", roster);
-  state.ball.x = 510;
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
+  state.ball.x = 506;
   state.ball.y = 0;
   stepGame(state, {}, {}, 1 / 60);
   assert.equal(state.score.blue, 0);
-  state.ball.x = 512;
+  state.ball.x = 509;
   stepGame(state, {}, {}, 1 / 60);
   assert.equal(state.score.blue, 1);
 });
 
 test("a bola de futebol gira enquanto se move", () => {
-  const state = createOnlineGame("haxball", roster);
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
   state.ball.vx = 200;
   stepGame(state, {}, {}, 1 / 60);
   assert.notEqual(state.ball.rotation, 0);
@@ -184,7 +184,7 @@ test("um gol atualiza o placar e pausa a partida", () => {
 });
 
 test("sem autoridade o convidado não marca gol nem pausa, e a bola não escapa da rede", () => {
-  const state = createOnlineGame("haxball", roster);
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
   state.ball.x = 512;
   state.ball.y = 0;
   state.ball.vx = 700;
@@ -193,13 +193,13 @@ test("sem autoridade o convidado não marca gol nem pausa, e a bola não escapa 
   assert.equal(state.freeze, 0);
   assert.equal(state.winner, null);
   // Esperando o gelo do snapshot do host, a bola pode ir até o fundo da rede
-  // (500 + 70 - 11), mas nunca atravessá-la.
-  assert.ok(state.ball.x <= 559.001, `bola em ${state.ball.x}`);
-  assert.ok(state.ball.x >= -559.001, `bola em ${state.ball.x}`);
+  // (500 + 70 - 8), mas nunca atravessá-la.
+  assert.ok(state.ball.x <= 562.001, `bola em ${state.ball.x}`);
+  assert.ok(state.ball.x >= -562.001, `bola em ${state.ball.x}`);
 });
 
 test("a rede amortece a bola em vez de devolvê-la ao campo", () => {
-  const state = createOnlineGame("haxball", roster);
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
   state.ball.x = 540;
   state.ball.y = 0;
   state.ball.vx = 600;
@@ -212,7 +212,7 @@ test("a rede amortece a bola em vez de devolvê-la ao campo", () => {
 });
 
 test("gol adiado: onGoal avisa sem marcar nem gelar (replay decide o placar)", () => {
-  const state = createOnlineGame("haxball", roster);
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
   state.ball.x = 512;
   state.ball.y = 0;
   let reported = null;
@@ -226,7 +226,7 @@ test("gol adiado: onGoal avisa sem marcar nem gelar (replay decide o placar)", (
 });
 
 test("haxball anda com teto de 120 (movimentação mais lenta)", () => {
-  const state = createOnlineGame("haxball", roster);
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
   const player = state.players[0];
   state.ball.x = 300;
   state.ball.y = 180;
@@ -234,9 +234,49 @@ test("haxball anda com teto de 120 (movimentação mais lenta)", () => {
   assert.ok(Math.hypot(player.vx, player.vy) <= 120.01);
 });
 
+test("campo 2x2 é menor e o gol acompanha a boca da rede", () => {
+  const small = createOnlineGame("haxball", roster);
+  assert.ok(small.field.w < 1000, `campo com ${small.field.w}`);
+  const hw = small.field.w / 2;
+  small.ball.x = hw + 6;
+  small.ball.y = 0;
+  stepGame(small, {}, {}, 1 / 60);
+  assert.equal(small.score.blue, 0);
+  small.ball.x = hw + 9;
+  stepGame(small, {}, {}, 1 / 60);
+  assert.equal(small.score.blue, 1);
+});
+
+test("bot perseguidor ataca o gol adversário sem fazer gol contra", () => {
+  const state = createBotGame("haxball", { blue: 0, orange: 1 }, FULL_FIELD);
+  state.ball.x = 100;
+  state.ball.y = 0;
+  state.ball.vx = 0;
+  state.ball.vy = 0;
+  for (let frame = 0; frame < 180; frame++) stepGame(state, {}, {}, 1 / 60);
+  assert.ok(state.ball.x < 100 || state.score.orange === 1, `bola em ${state.ball.x}`);
+  assert.equal(state.score.blue, 0);
+});
+
+test("bola rápida empurra o jogador para trás", () => {
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
+  const player = state.players[0];
+  player.x = 0;
+  player.y = 0;
+  player.vx = 0;
+  player.vy = 0;
+  state.ball.x = -60;
+  state.ball.y = 0;
+  state.ball.vx = 700;
+  state.ball.vy = 0;
+  for (let frame = 0; frame < 8; frame++) stepGame(state, {}, {}, 1 / 60);
+  assert.ok(player.x > 0.5, `jogador em ${player.x}`);
+  assert.ok(player.vx > 20, `vx em ${player.vx}`);
+});
+
 test("a reconciliação aproxima o estado do host sem trocá-lo de uma vez", () => {
-  const local = createOnlineGame("haxball", roster);
-  const target = createOnlineGame("haxball", roster);
+  const local = createOnlineGame("haxball", roster, FULL_FIELD);
+  const target = createOnlineGame("haxball", roster, FULL_FIELD);
   local.ball.x = 10;
   target.ball.x = 30;
   local.players[1].x = 120;
@@ -250,8 +290,8 @@ test("a reconciliação aproxima o estado do host sem trocá-lo de uma vez", () 
 });
 
 test("a reconciliação faz snap em divergência grande e copia o estado do host", () => {
-  const local = createOnlineGame("haxball", roster);
-  const target = createOnlineGame("haxball", roster);
+  const local = createOnlineGame("haxball", roster, FULL_FIELD);
+  const target = createOnlineGame("haxball", roster, FULL_FIELD);
   target.ball.x = 300;
   target.score.blue = 3;
   target.freeze = 1.2;
@@ -273,7 +313,7 @@ test("a reconciliação faz snap em divergência grande e copia o estado do host
 });
 
 test("a reconciliação é inofensiva sem alvo ou quando local e alvo são o mesmo objeto", () => {
-  const state = createOnlineGame("haxball", roster);
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
   const before = state.ball.x;
   reconcileAuthoritativeState(state, null, "white", 1 / 60);
   reconcileAuthoritativeState(state, state, "white", 1 / 60);
@@ -281,8 +321,8 @@ test("a reconciliação é inofensiva sem alvo ou quando local e alvo são o mes
 });
 
 test("reiniciar a partida zera relógio, placar e gelo na reconciliação", () => {
-  const local = createOnlineGame("haxball", roster);
-  const target = createOnlineGame("haxball", roster);
+  const local = createOnlineGame("haxball", roster, FULL_FIELD);
+  const target = createOnlineGame("haxball", roster, FULL_FIELD);
   local.elapsed = 120;
   local.freeze = 0.8;
   local.score.blue = 4;

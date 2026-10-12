@@ -22,7 +22,7 @@ export default function GamesPage() {
       <Header />
       <main className="games-page shell">
         <div className="games-intro">
-          <p className="eyebrow"><span /> Playground / 01—02</p>
+          <p className="eyebrow"><span /> Playground / 01 e 02</p>
           <h1>Jogos com <em>código</em> e competição.</h1>
           <p>Dois jogos de arena para enfrentar bots ou entrar em salas públicas. Escolha um campo e comece a partida.</p>
         </div>

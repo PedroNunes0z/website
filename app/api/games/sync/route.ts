@@ -1,7 +1,7 @@
 import { getRedis } from "@/lib/redis";
 import type { GameId } from "@/lib/games";
 import { getGameRoomState, heartbeatGameRoom, publishGameSnapshot } from "@/lib/games";
-import { stepGame } from "@/lib/game-engine";
+import { stepGame, fieldFor } from "@/lib/game-engine";
 import type { GameInput, GameSnapshot } from "@/lib/game-engine";
 
 interface SyncRequest {
@@ -58,8 +58,12 @@ export async function POST(req: Request) {
 
     // Inicializar simulação se não existir
     if (!simulation) {
+      const stored = serverSnapshot as GameSnapshot | null;
+      const snapshot: GameSnapshot = stored && stored.field
+        ? stored
+        : { game, field: fieldFor(game, room.players.length), players: [], ball: { x: 0, y: 0, vx: 0, vy: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
       simulation = {
-        snapshot: serverSnapshot || { game, players: [], ball: { x: 0, y: 0, vx: 0, vy: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 },
+        snapshot,
         lastKicks: {},
         lastStep: now,
       };

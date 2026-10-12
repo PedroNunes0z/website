@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
 import { acceptGameInput, acceptGameSnapshot, gameFromString, getGameRoomState } from "@/lib/games";
-import { publishRoomEvent } from "@/lib/ably";
-import { REALTIME_VERSION } from "@/lib/realtime";
 import { isSameOrigin } from "@/lib/request-security";
 import type { GameInput, GameSnapshot } from "@/lib/game-engine";
 
@@ -63,9 +61,6 @@ export async function POST(request: NextRequest, context: RouteContext) {
   const { id } = await context.params;
   if (!/^[A-Z0-9]{8}$/.test(id)) return NextResponse.json({ error: "Sala inválida." }, { status: 400 });
   try {
-    // Instante de chegada: viaja dentro do evento para que o cliente meça a
-    // entrega (servidor → Ably → navegador) separada da latência da escrita.
-    const sentAt = Date.now();
     const raw = await request.text();
     if (raw.length > 12_000) return NextResponse.json({ error: "Dados grandes demais." }, { status: 413 });
     const body = JSON.parse(raw);
@@ -76,33 +71,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
       : body.input;
     if (body.action === "input" && validInput(normalizedInput)) {
       const persist = await acceptGameInput(game, id, body.playerId, normalizedInput);
-      // `notify: false`: cliente com tempo real ativo publicando direto no
-      // canal — o POST serve só para persistir o input no Redis (resync e
-      // fallback). Sem o publish aqui, o destinatário não receberia de volta
-      // uma versão defasada do mesmo input ~300 ms depois (regressão de
-      // movimento).
-      const notify = body.notify !== false;
-      // `after`: a resposta não espera nem o Redis nem o Ably (que nunca podem
-      // segurar a escrita), mas o runtime mantém a função viva até gravar e
-      // publicar. Persistência e notificação correm em paralelo — a escrita no
-      // Redis não pode adicionar sua latência à entrega do evento.
+      // Sem canal push: a resposta volta rápido e a gravação no Redis roda
+      // depois dela. Quem está na sala lê via UDP ou sondagem HTTP.
       after(async () => {
-        await Promise.all([
-          persist(),
-          notify ? publishRoomEvent(id, "game-input-updated", { v: REALTIME_VERSION, playerId: body.playerId, input: normalizedInput, sentAt }) : Promise.resolve(),
-        ]);
+        await persist();
       });
       return NextResponse.json({ ok: true });
     }
     if (body.action === "snapshot" && validSnapshot(body.snapshot, game)) {
       if (typeof body.ownerToken !== "string" || body.ownerToken.length > 64) return NextResponse.json({ error: "Dono da sala inválido." }, { status: 403 });
       const persist = await acceptGameSnapshot(game, id, body.playerId, body.ownerToken, body.snapshot);
-      const notify = body.notify !== false;
       after(async () => {
-        await Promise.all([
-          persist(),
-          notify ? publishRoomEvent(id, "game-snapshot-updated", { v: REALTIME_VERSION, playerId: body.playerId, snapshot: body.snapshot, sentAt }) : Promise.resolve(),
-        ]);
+        await persist();
       });
       return NextResponse.json({ ok: true });
     }

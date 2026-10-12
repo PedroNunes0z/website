@@ -191,8 +191,8 @@ public class PedroNunes {
 
 ## Instituto Federal do Sudeste de Minas Gerais
 
-**Full Stack Developer — PIBITI**
-`2025 — 2026`
+**Full Stack Developer · PIBITI**
+`2025 · 2026`
 
 Research and technological development project focused on a **Full Stack Progressive Web Application** for a nutritional behavior platform.
 
@@ -221,7 +221,7 @@ Main contributions:
 ## Descontey!
 
 **Full Stack Developer / Project Lead**
-`2025 — Present`
+`2025 · Present`
 
 Full Stack platform focused on coupons, promotions, content management and scalable web infrastructure.
 
@@ -323,7 +323,7 @@ Completed in **June 2026**
       <img src="https://hatscripts.github.io/circle-flags/flags/fi.svg" width="48" alt="Finland"/>
     </td>
     <td valign="middle">
-      <strong>University of Helsinki — Finland</strong><br>
+<strong>University of Helsinki · Finland</strong><br>
       Java Programming MOOC & Full Stack Open
     </td>
   </tr>

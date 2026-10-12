@@ -2,29 +2,21 @@ import type { GameRoom, GameRoomPlayer } from "@/lib/games";
 import type { GameInput, GameSnapshot } from "@/lib/game-engine";
 
 /**
- * Contrato compartilhado entre servidor e cliente para os eventos de tempo real
- * publicados no Ably. Eventos são versionados (`v`) e pequenos; o servidor
- * segue sendo a fonte da verdade para o estado persistente da sala.
+ * Contrato de versão dos envelopes de tempo real (UDP e sondagem HTTP).
+ * Eventos são pequenos e versionados em `v`; o servidor segue sendo a fonte
+ * da verdade para o estado persistente da sala.
  *
- * Dois publicadores convivem no mesmo canal:
- * - Servidor (REST, sem clientId): eventos de sala — entrada/saída de jogador,
- *   início e fim de partida — além de inputs/snapshots quando um cliente opera
- *   no modo compatibilidade HTTP.
- * - Clientes (Realtime, token com `publish`): os dados quentes da partida
- *   (inputs de cada jogador e snapshots do host) vão direto pelo websocket do
- *   Ably, sem atravessar POST HTTP → Redis → Ably a cada transmissão — esse
- *   caminho custava ~300–400 ms por evento em serverless e era a origem do
- *   lag sentido por quem entra na sala.
- *
- * Confiança na recepção: o Ably atribui à mensagem o `clientId` do token do
- * publicador (impossível forjar, pois o token é emitido com clientId fixo).
- * Clientes só aceitam `game-snapshot-updated` publicado pelo dono da sala e
- * eventos de sala vindos do servidor (`clientId` ausente); inputs valem pela
- * identidade atribuída pelo canal.
+ * Dois caminhos convivem:
+ * - UDP (geckos.io, com ou sem servidor Render/LAN): inputs de cada jogador
+ *   e snapshots do host viajam direto, sem atravessar POST HTTP a cada
+ *   transmissão. Esse era o caminho de ~300 a 400 ms por evento em serverless
+ *   e a origem do lag de quem entra na sala.
+ * - HTTP (sondagem): leitura periódica do estado autoritativo no Redis para
+ *   quem está sem UDP, além de persistência de todas as escritas.
  */
 export const REALTIME_VERSION = 1;
 
-/** TTL dos tokens emitidos no servidor; o SDK do Ably renova automaticamente. */
+/** Janela de presença das salas e dos transportes locais. */
 export const realtimeTokenTtlMs = 15 * 60 * 1000;
 
 export type RoomEventName =
@@ -44,7 +36,7 @@ export const ROOM_EVENT_NAMES: readonly RoomEventName[] = [
   "game-input-updated",
 ];
 
-/** Canal por sala, dentro do escopo permitido pela chave (`game-room:*`). */
+/** Canal por sala no transporte UDP (`game-room:<id>`). */
 export function roomChannelName(roomId: string): string {
   return `game-room:${roomId}`;
 }
@@ -59,13 +51,13 @@ export interface RoomEventData {
   input?: GameInput;
   /**
    * Momento em que o servidor recebeu a escrita que gerou este evento. O
-   * cliente mede `Date.now() - sentAt` para separar a latência do caminho
-   * servidor→Ably→cliente da latência da escrita HTTP do próprio cliente.
+   * cliente mede `Date.now() - sentAt` para separar a latência de entrega
+   * da latência da escrita HTTP do próprio cliente.
    */
   sentAt?: number;
 }
 
-/** Tudo que o hook de tempo real entrega ao consumidor. */
+/** Tudo que o transporte em tempo real entrega ao consumidor. */
 export type RealtimeClientEvent =
   | { type: "resync"; reason: "connected" | "reconnected" }
   | {
@@ -73,9 +65,9 @@ export type RealtimeClientEvent =
       name: string;
       data: RoomEventData | null;
       /**
-       * `clientId` atribuído pelo Ably ao publicador (o token é amarrado ao
-       * playerId, então não é forjável). `null` quando o evento veio do
-       * servidor via API REST — tratado como confiável.
+       * Identidade do publicador quando o transporte a garante (UDP com
+       * sala). `null` indica evento vindo do servidor pela API REST,
+       * tratado como confiável por definição.
        */
       fromClientId: string | null;
     };
@@ -93,11 +85,8 @@ export function isVersionedEvent(data: unknown): data is RoomEventData {
 }
 
 /**
- * Capacidade do token de um jogador: leitura e publicação no canal da sala.
- * O publish é o que permite ao convidado enviar inputs direto pelo websocket
- * (e ao host publicar snapshots), cortando o servidor do caminho quente. A
- * identidade do publicador é garantida pelo `clientId` fixado no token, e os
- * consumidores ignoram eventos de sala publicados por clientes.
+ * Escopo do canal de uma sala no transporte UDP. Mantido para documentar o
+ * contrato e para os testes de tempo real.
  */
 export function roomTokenCapability(roomId: string): string {
   return JSON.stringify({ [roomChannelName(roomId)]: ["subscribe", "publish"] });
