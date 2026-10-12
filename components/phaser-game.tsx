@@ -51,7 +51,20 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
         x: 0, y: 0, sprint: false, kickSeq: 0, dashSeq: 0,
         aimX: 0, aimY: 0, power: 0, spin: false, kickSpin: false, charging: false,
       };
-      let chargeStart = 0;
+      // Chute sem mira: encostou + clicou/Espaço = chute de potência fixa.
+      const triggerKick = () => {
+        if (!isHaxball || state.freeze > 0 || state.winner) return;
+        const me = state.players.find((p) => p.id === "local" && !p.bot);
+        if (!me || me.cooldown > 0) return;
+        const dx = state.ball.x - me.x;
+        const dy = state.ball.y - me.y;
+        if (dx * dx + dy * dy > 41 * 41) return;
+        input.aimX = state.ball.x + state.ball.vx * 0.1;
+        input.aimY = state.ball.y + state.ball.vy * 0.1;
+        input.power = 0.62;
+        input.kickSpin = false;
+        input.kickSeq += 1;
+      };
 
       class ArenaScene extends Phaser.Scene {
         private gfx!: Phaser.GameObjects.Graphics;
@@ -66,37 +79,22 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             ) as Record<string, Phaser.Input.Keyboard.Key>;
           }
           this.input.on("pointermove", (p: Phaser.Input.Pointer) => {
-            input.aimX = ((p.worldX - WORLD_W / 2) / this.scaleFactorX()) * 1 - 0 + this.fieldX(p.worldX);
+            input.aimX = this.fieldX(p.worldX);
             input.aimY = this.fieldY(p.worldY);
           });
           this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
             if (!isHaxball || !p.leftButtonDown()) return;
-            chargeStart = this.time.now;
-            input.charging = true;
-            input.power = 0;
-            input.aimX = this.fieldX(p.worldX);
-            input.aimY = this.fieldY(p.worldY);
-          });
-          this.input.on("pointerup", (p: Phaser.Input.Pointer) => {
-            if (!isHaxball || input.charging !== true) return;
-            input.aimX = this.fieldX(p.worldX);
-            input.aimY = this.fieldY(p.worldY);
-            input.power = Math.min(1, (this.time.now - chargeStart) / 900);
-            input.kickSpin = !!this.keys?.F?.isDown;
-            input.charging = false;
-            input.kickSeq += 1;
+            triggerKick();
           });
           kb?.on("keydown-Q", () => {
             input.dashSeq += 1;
           });
+          kb?.on("keydown-SPACE", () => {
+            triggerKick();
+          });
         }
 
-        private scaleFactorX(): number {
-          return 1;
-        }
-
-        private fieldX(worldX: number): number {
-          return Phaser.Math.Clamp(worldX - WORLD_W / 2, -1000, 1000);
+        private fieldX(worldX: number): number {          return Phaser.Math.Clamp(worldX - WORLD_W / 2, -1000, 1000);
         }
 
         private fieldY(worldY: number): number {
@@ -110,8 +108,6 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             input.x = Number(k.D.isDown || k.RIGHT.isDown) - Number(k.A.isDown || k.LEFT.isDown);
             input.y = Number(k.S.isDown || k.DOWN.isDown) - Number(k.W.isDown || k.UP.isDown);
             input.sprint = !!k.SHIFT?.isDown;
-            input.spin = !!k.F?.isDown;
-            if (input.charging) input.power = Math.min(1, (this.time.now - chargeStart) / 900);
           }
           stepGame(state, { local: input }, lastKicks, dt);
           this.draw(state);
@@ -124,29 +120,27 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           const oy = WORLD_H / 2 - FIELD_H / 2;
           if (s.game === "haxball") this.drawPitch(g, ox, oy, s);
           else this.drawRink(g, ox, oy);
-          // Jogadores.
+          // Jogadores sem borda preta; só o anel de destaque de quem joga.
           for (const p of s.players) {
             const r = s.game === "haxball" ? 16 : 24;
             const px = p.x + WORLD_W / 2;
             const py = p.y + WORLD_H / 2;
             g.fillStyle(p.team === "blue" ? 0xfffdf9 : 0xff8d4f, 1);
             g.fillCircle(px, py, r);
-            g.lineStyle(p.id === "local" ? 4 : 2, p.id === "local" ? 0xffd166 : 0x050505, 1);
-            g.strokeCircle(px, py, r);
+            if (p.id === "local") {
+              g.lineStyle(3, s.game === "haxball" ? 0xffd166 : 0x0b3d91, 1);
+              g.strokeCircle(px, py, r + 4);
+            }
           }
-          // Bola / disco.
+          // Bola / disco sem contorno.
           const bx = s.ball.x + WORLD_W / 2;
           const by = s.ball.y + WORLD_H / 2;
           if (s.game === "haxball") {
             g.fillStyle(0xfffdf9, 1);
             g.fillCircle(bx, by, 11);
-            g.lineStyle(2, 0x080808, 1);
-            g.strokeCircle(bx, by, 11);
           } else {
-            g.fillStyle(0xff8d4f, 1);
+            g.fillStyle(0x141414, 1);
             g.fillCircle(bx, by, 11);
-            g.lineStyle(2, 0x050505, 1);
-            g.strokeCircle(bx, by, 11);
           }
         }
 

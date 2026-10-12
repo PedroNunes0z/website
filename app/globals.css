@@ -465,6 +465,9 @@ img { max-width: 100%; }
 .game-net-hud-mode { color: var(--muted); }
 .game-net-hud-mid { color: #f0b45c; }
 .game-net-hud-bad { color: #ff7262; }
+.game-replay-badge { position: absolute; top: .9rem; left: 50%; z-index: 4; padding: .55rem 1rem; border: 1px solid var(--orange); background: rgba(5, 5, 5, .88); color: var(--white); font-family: var(--mono); font-size: .6rem; text-transform: uppercase; letter-spacing: .14em; cursor: pointer; transform: translateX(-50%); }
+.game-replay-badge strong { color: var(--orange); }
+.game-replay-badge:hover { background: #251810; }
 .game-goal-overlay { position: absolute; top: 50%; left: 50%; z-index: 2; min-width: min(420px, 86%); padding: 1.5rem 2.5rem; display: flex; flex-direction: column; align-items: center; gap: .25rem; border: 1px solid var(--orange); background: rgba(8, 8, 8, .94); box-shadow: 0 0 70px rgba(255, 141, 79, .24); color: var(--white); text-align: center; transform: translate(-50%, -50%); pointer-events: none; animation: game-goal-appear 420ms ease-out both; }
 .game-goal-overlay span { color: var(--orange); font-family: var(--display); font-size: clamp(1.5rem, 4vw, 3rem); letter-spacing: .12em; }
 .game-goal-overlay strong { font-family: var(--display); font-size: clamp(2.4rem, 6vw, 5rem); line-height: 1; }

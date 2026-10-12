@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = await readFile(new URL("../lib/game-engine.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { createOnlineGame, createBotGame, botShotPower, resolveKickDirection, stepGame, reconcileAuthoritativeState } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { createOnlineGame, createBotGame, botShotPower, resolveKickDirection, stepGame, applyGoal, reconcileAuthoritativeState } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 const roster = [
   { id: "white", name: "Branco", team: "blue", joinedAt: 0, lastSeen: 0 },
@@ -209,6 +209,29 @@ test("a rede amortece a bola em vez de devolvê-la ao campo", () => {
   const speedAfter = Math.hypot(state.ball.vx, state.ball.vy);
   assert.ok(speedAfter < speedBefore * 0.5, `rede não amortecedu: ${speedBefore} -> ${speedAfter}`);
   assert.ok(state.ball.x <= 559.001, `bola em ${state.ball.x}`);
+});
+
+test("gol adiado: onGoal avisa sem marcar nem gelar (replay decide o placar)", () => {
+  const state = createOnlineGame("haxball", roster);
+  state.ball.x = 512;
+  state.ball.y = 0;
+  let reported = null;
+  stepGame(state, {}, {}, 1 / 60, { deferGoal: true, onGoal: (team) => { reported = team; } });
+  assert.equal(reported, "blue");
+  assert.equal(state.score.blue, 0);
+  assert.equal(state.freeze, 0);
+  applyGoal(state, reported);
+  assert.equal(state.score.blue, 1);
+  assert.ok(state.freeze > 0);
+});
+
+test("haxball anda com teto de 120 (movimentação mais lenta)", () => {
+  const state = createOnlineGame("haxball", roster);
+  const player = state.players[0];
+  state.ball.x = 300;
+  state.ball.y = 180;
+  for (let frame = 0; frame < 180; frame++) stepGame(state, { white: input({ x: 1 }) }, {}, 1 / 60);
+  assert.ok(Math.hypot(player.vx, player.vy) <= 120.01);
 });
 
 test("a reconciliação aproxima o estado do host sem trocá-lo de uma vez", () => {

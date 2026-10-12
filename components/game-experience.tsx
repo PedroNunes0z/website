@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, Copy, Maximize2, Minimize2, RefreshCcw, Users } 
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createBotGame, createOnlineGame, drawGame, pointerToField, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameInput, type GameSnapshot } from "@/lib/game-engine";
+import { applyGoal, createBotGame, createOnlineGame, drawGame, pointerToField, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameActor, type GameInput, type GameObject, type GameSnapshot } from "@/lib/game-engine";
 import type { GameId, GameRoom, GameTeam } from "@/lib/games";
 import { isVersionedEvent, REALTIME_VERSION, type RealtimeClientEvent } from "@/lib/realtime";
 import { usePhaserEngine } from "@/lib/game-server";
@@ -58,17 +58,23 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const geckosRef = useRef<GeckosRoomTransport | null>(null);
   const udpSnapTickRef = useRef(0);
   const keysRef = useRef<Set<string>>(new Set());
-  const pointerDownAt = useRef(0);
   const lastGoalCountRef = useRef(0);
   const hudScoreRef = useRef({ blue: 0, orange: 0 });
   const goalUntilRef = useRef(0);
+  // Replay do gol: play → net (1s bola na rede) → replay → board (placar).
+  const phaseRef = useRef<"play" | "net" | "replay" | "board">("play");
+  const pendingGoalRef = useRef<{ team: GameTeam } | null>(null);
+  const netUntilRef = useRef(0);
+  const bufferRef = useRef<Array<{ players: GameActor[]; ball: GameObject }>>([]);
+  const replayRef = useRef<{ frames: Array<{ players: GameActor[]; ball: GameObject }>; index: number } | null>(null);
   
   const [hud, setHud] = useState({ blue: 0, orange: 0, elapsed: 0, winner: null as GameTeam | null });
   const [goalNotice, setGoalNotice] = useState<{ team: GameTeam; blue: number; orange: number; id: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [networkError, setNetworkError] = useState("");
-  const [metrics, setMetrics] = useState({ ping: 0, fps: 60 });
+  const [metrics, setMetrics] = useState({ ping: 0, fps: 60, sim: 60 });
   const [udpLive, setUdpLive] = useState(false);
+  const [replayBadge, setReplayBadge] = useState(false);
   const pingRef = useRef(0);
   const fpsRef = useRef(60);
   const transportRef = useRef<RealtimeStatus>("idle");
@@ -95,6 +101,10 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     lastGoalCountRef.current = 0;
     hudScoreRef.current = { blue: 0, orange: 0 };
     goalUntilRef.current = 0;
+    phaseRef.current = "play";
+    pendingGoalRef.current = null;
+    bufferRef.current = [];
+    replayRef.current = null;
   }, [game, mode, bots, roomId, roomStatus]);
 
   useEffect(() => {
@@ -103,19 +113,54 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
 
+  // Encerra o replay aplicando o placar (também usado pelo clique no selo).
+  const skipReplay = useCallback(() => {
+    const pending = pendingGoalRef.current;
+    replayRef.current = null;
+    setReplayBadge(false);
+    if (phaseRef.current !== "replay" || !pending) return;
+    applyGoal(stateRef.current, pending.team);
+    pendingGoalRef.current = null;
+    phaseRef.current = "board";
+  }, []);
+
+  // Chute sem mira: encostou na bola (41px) + clique/Espaço = chute de
+  // potência fixa na direção em que a bola está, com leve antecipação.
+  const triggerKick = useCallback(() => {
+    if (phaseRef.current === "replay") {
+      skipReplay();
+      return;
+    }
+    const snapshot = stateRef.current;
+    if (snapshot.game !== "haxball" || snapshot.freeze > 0 || snapshot.winner || phaseRef.current !== "play") return;
+    const meId = mode === "bot" ? "local" : playerId;
+    const me = snapshot.players.find((actor) => actor.id === meId && !actor.bot);
+    if (!me || me.cooldown > 0) return;
+    const dx = snapshot.ball.x - me.x;
+    const dy = snapshot.ball.y - me.y;
+    if (dx * dx + dy * dy > 41 * 41) return;
+    inputRef.current.aimX = snapshot.ball.x + snapshot.ball.vx * 0.1;
+    inputRef.current.aimY = snapshot.ball.y + snapshot.ball.vy * 0.1;
+    inputRef.current.power = 0.62;
+    inputRef.current.kickSpin = false;
+    inputRef.current.kickSeq += 1;
+  }, [skipReplay, mode, playerId]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const onDown = (event: KeyboardEvent) => {
-      if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyF", "KeyQ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"].includes(event.code)) {
+      if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyF", "KeyQ", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"].includes(event.code)) {
         if (document.activeElement === canvas) event.preventDefault();
         const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement;
+        const onCanvas = document.activeElement === canvas;
         if (game === "haxball" && event.code === "KeyQ" && !event.repeat && !typing) inputRef.current.dashSeq += 1;
+        if (game === "haxball" && event.code === "Space" && !typing && onCanvas) triggerKick();
         keysRef.current.add(event.code);
       }
     };
     const onUp = (event: KeyboardEvent) => { keysRef.current.delete(event.code); };
-    const onBlur = () => { keysRef.current.clear(); inputRef.current.x = 0; inputRef.current.y = 0; inputRef.current.charging = false; };
+    const onBlur = () => { keysRef.current.clear(); inputRef.current.x = 0; inputRef.current.y = 0; };
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", onUp);
     window.addEventListener("blur", onBlur);
@@ -124,7 +169,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       window.removeEventListener("keyup", onUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [game]);
+  }, [game, triggerKick]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -134,6 +179,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     let lastTime = performance.now();
     let hudTime = lastTime;
     let fpsFrames = 0;
+    let simSteps = 0;
     let fpsWindowStart = lastTime;
 
     const resize = () => {
@@ -147,17 +193,25 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     observer.observe(canvas);
     resize();
 
+    // Passo fixo de 60 Hz desacoplado do render: a SIM anda em cadência
+    // constante (anti-espiral com teto de 4 passos) e o FPS mede só o desenho.
+    const STEP = 1 / 60;
+    let acc = 0;
+
     const run = (now: number) => {
-      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      const dt = Math.min((now - lastTime) / 1000, 0.25);
       lastTime = now;
       fpsFrames += 1;
 
       if (now - fpsWindowStart >= 500) {
-        const fps = Math.round((fpsFrames * 1000) / (now - fpsWindowStart));
+        const window = Math.max(1, now - fpsWindowStart);
+        const fps = Math.round((fpsFrames * 1000) / window);
+        const sim = Math.round((simSteps * 1000) / window);
         fpsRef.current = fps;
         // Flush único a cada 500ms: evita re-render por medição de rede.
-        setMetrics({ ping: pingRef.current, fps });
+        setMetrics({ ping: pingRef.current, fps, sim });
         fpsFrames = 0;
+        simSteps = 0;
         fpsWindowStart = now;
       }
 
@@ -165,36 +219,84 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       inputRef.current.x = Number(keys.has("KeyD") || keys.has("ArrowRight")) - Number(keys.has("KeyA") || keys.has("ArrowLeft"));
       inputRef.current.y = Number(keys.has("KeyS") || keys.has("ArrowDown")) - Number(keys.has("KeyW") || keys.has("ArrowUp"));
       inputRef.current.sprint = keys.has("ShiftLeft") || keys.has("ShiftRight");
-      inputRef.current.spin = keys.has("KeyF");
-      if (inputRef.current.charging) inputRef.current.power = Math.min(1, (now - pointerDownAt.current) / 900);
 
       const currentRoom = roomRef.current;
       const host = mode === "online" && currentRoom?.ownerId === playerId && !!ownerToken;
+      const authoritative = mode === "bot" ? true : host;
+      // Replay local só para quem simula com autoridade (bot + host); o
+      // convidado assiste ao gol pelo snapshot e mantém o placar antigo.
+      const canReplay = mode === "bot" || host;
+      const deadBall = phaseRef.current === "net" || phaseRef.current === "replay";
+      const fireGoal = (team: GameTeam) => {
+        if (!canReplay || phaseRef.current !== "play") return;
+        pendingGoalRef.current = { team };
+        phaseRef.current = "net";
+        netUntilRef.current = now + 1000;
+      };
+      const stepOptions = { authoritative, deferGoal: canReplay, onGoal: fireGoal };
 
-      if (mode === "bot") {
-        stepGame(stateRef.current, { local: inputRef.current }, lastKicksRef.current, dt);
-      } else if (mode === "online" && playerId && currentRoom?.status === "playing") {
-        if (host) updateOnlineRoster(stateRef.current, currentRoom.players);
-        stepGame(stateRef.current, { ...remoteInputsRef.current, [playerId]: inputRef.current }, lastKicksRef.current, dt, { authoritative: host });
-        if (!host) {
-          reconcileAuthoritativeState(stateRef.current, targetRef.current, playerId, dt);
-          // Atraso efetivo da sincronização: quanto o relógio local está à
-          // frente do último snapshot do host (≈ latência de publicação).
-          if (targetRef.current) netStatsRef.current.driftMs = Math.round((stateRef.current.elapsed - targetRef.current.elapsed) * 1000);
+      acc = Math.min(acc + dt, 0.25);
+      let steps = 0;
+      while (acc >= STEP && steps < 4) {
+        if (mode === "bot") {
+          stepGame(stateRef.current, deadBall ? {} : { local: inputRef.current }, lastKicksRef.current, STEP, stepOptions);
+        } else if (mode === "online" && playerId && currentRoom?.status === "playing") {
+          if (host) updateOnlineRoster(stateRef.current, currentRoom.players);
+          stepGame(stateRef.current, deadBall ? {} : { ...remoteInputsRef.current, [playerId]: inputRef.current }, lastKicksRef.current, STEP, stepOptions);
+          if (!host) {
+            reconcileAuthoritativeState(stateRef.current, targetRef.current, playerId, STEP);
+            // Atraso efetivo da sincronização: quanto o relógio local está à
+            // frente do último snapshot do host (≈ latência de publicação).
+            if (targetRef.current) netStatsRef.current.driftMs = Math.round((stateRef.current.elapsed - targetRef.current.elapsed) * 1000);
+          }
+        } else {
+          break;
+        }
+        acc -= STEP;
+        steps += 1;
+      }
+      if (steps === 4) acc = 0;
+      simSteps += steps;
+
+      const localId = mode === "bot" ? "local" : (playerId ?? "");
+
+      // Anel do replay: guarda os últimos ~5s de frames (só fora do replay).
+      if (phaseRef.current === "play" || phaseRef.current === "net") {
+        const snapshot = stateRef.current;
+        bufferRef.current.push({
+          players: snapshot.players.map((actor) => ({ ...actor })),
+          ball: { ...snapshot.ball },
+        });
+        if (bufferRef.current.length > 300) bufferRef.current.shift();
+      }
+
+      // Rede por 1s → replay do lance → placar.
+      if (phaseRef.current === "net" && pendingGoalRef.current && now >= netUntilRef.current) {
+        const frames = bufferRef.current;
+        if (frames.length >= 40) {
+          replayRef.current = { frames: frames.slice(Math.max(0, frames.length - 165)), index: 0 };
+          phaseRef.current = "replay";
+          setReplayBadge(true);
+        } else {
+          applyGoal(stateRef.current, pendingGoalRef.current.team);
+          pendingGoalRef.current = null;
+          phaseRef.current = "board";
         }
       }
 
-      if (game === "haxball" && mode === "online" && !host && playerId) {
-        const localActor = stateRef.current.players.find((actor) => actor.id === playerId);
-        if (localActor) {
-          localActor.charge = inputRef.current.charging ? inputRef.current.power : 0;
-          localActor.curve = inputRef.current.spin;
-          localActor.aimX = inputRef.current.aimX;
-          localActor.aimY = inputRef.current.aimY;
+      if (phaseRef.current === "replay" && replayRef.current) {
+        const replay = replayRef.current;
+        replay.index += dt * 60;
+        if (replay.index >= replay.frames.length) {
+          skipReplay();
+          drawGame(ctx, stateRef.current, localId);
+        } else {
+          const frame = replay.frames[Math.floor(replay.index)];
+          drawGame(ctx, { ...stateRef.current, players: frame.players, ball: frame.ball }, localId);
         }
+      } else {
+        drawGame(ctx, stateRef.current, localId);
       }
-
-      drawGame(ctx, stateRef.current, mode === "bot" ? "local" : (playerId ?? ""));
 
       const scores = stateRef.current.score;
       const totalGoals = scores.blue + scores.orange;
@@ -202,6 +304,11 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         lastGoalCountRef.current = totalGoals;
         goalUntilRef.current = 0;
         setGoalNotice(null);
+        phaseRef.current = "play";
+        pendingGoalRef.current = null;
+        bufferRef.current = [];
+        replayRef.current = null;
+        setReplayBadge(false);
       } else if (totalGoals > lastGoalCountRef.current) {
         lastGoalCountRef.current = totalGoals;
         if (stateRef.current.freeze > 0) {
@@ -215,6 +322,11 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       if (goalUntilRef.current > 0 && now >= goalUntilRef.current) {
         goalUntilRef.current = 0;
         setGoalNotice(null);
+        // Placar exibido: volta ao jogo e limpa o anel para o próximo gol.
+        if (phaseRef.current === "board") {
+          phaseRef.current = "play";
+          bufferRef.current = [];
+        }
       }
 
       if (now - hudTime > 180) {
@@ -228,7 +340,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     frame = requestAnimationFrame(run);
     return () => { cancelAnimationFrame(frame); observer.disconnect(); };
-  }, [game, mode, playerId, ownerToken]);
+  }, [game, mode, playerId, ownerToken, skipReplay]);
 
   const lastResyncRef = useRef(0);
 
@@ -583,21 +695,13 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     event.currentTarget.focus();
+    if (phaseRef.current === "replay") {
+      skipReplay();
+      return;
+    }
     if (game !== "haxball" || event.button !== 0) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    pointerDownAt.current = performance.now();
-    inputRef.current.charging = true;
-    inputRef.current.power = 0;
     updateAim(event);
-  };
-
-  const onPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (game !== "haxball" || !inputRef.current.charging) return;
-    updateAim(event);
-    inputRef.current.power = Math.min(1, (performance.now() - pointerDownAt.current) / 900);
-    inputRef.current.kickSpin = keysRef.current.has("KeyF");
-    inputRef.current.charging = false;
-    inputRef.current.kickSeq += 1;
+    triggerKick();
   };
 
   const toggleFullscreen = async () => {
@@ -613,7 +717,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   // Semáforo da conexão: verde estável, amarelo atento, vermelho ruim.
   const pingTone = metrics.ping < 80 ? "ok" : metrics.ping < 180 ? "mid" : "bad";
   const fpsTone = metrics.fps > 55 ? "ok" : metrics.fps > 35 ? "mid" : "bad";
-  
+  const simTone = metrics.sim >= 55 ? "ok" : "bad";
   return (
     <div ref={boardRef} className="game-board-wrap">
       <div className="game-board-hud">
@@ -628,17 +732,19 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
           {mode === "online" && <span className="game-net-hud-mode">{realtimeStatus === "idle" ? "Preparando sala…" : connLabels[realtimeStatus]}</span>}
           {mode === "online" && udpLive && <span className="game-net-hud-ok"><i aria-hidden="true" />UDP ativo</span>}
           {mode === "online" && <span className={`game-net-hud-${pingTone}`}><i aria-hidden="true" />ping {metrics.ping}ms</span>}
+          <span className={`game-net-hud-${simTone}`}><i aria-hidden="true" />sim {metrics.sim}</span>
           <span className={`game-net-hud-${fpsTone}`}><i aria-hidden="true" />fps {metrics.fps}</span>
         </div>
+        {replayBadge && <button type="button" className="game-replay-badge" onClick={() => skipReplay()}><strong>Replay</strong> · clique para pular</button>}
 
-        <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? " e o mouse para chutar" : ""}`} onPointerDown={onPointerDown} onPointerMove={updateAim} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} />
+        <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? ", clique ou Espaço para chutar" : ""}`} onPointerDown={onPointerDown} onPointerMove={updateAim} onPointerEnter={updateAim} onContextMenu={(event) => event.preventDefault()} />
         {mode === "online" && room?.status === "waiting" && <div className="game-waiting">{isHost ? "Convide jogadores e clique em Iniciar partida." : "Aguardando o dono iniciar a partida."}</div>}
         {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong>{goalNotice.blue} <i>—</i> {goalNotice.orange}</strong><small>Equipe {goalNotice.team === "blue" ? "branca" : "laranja"}</small></div>}
         {hud.winner && !goalNotice && <div className="game-waiting">Equipe {hud.winner === "blue" ? "branca" : "laranja"} venceu.</div>}
       </div>
 
       <div className="game-board-footer">
-        <span>WASD ou setas: mover {game === "haxball" ? " · Segure o clique: chute · Shift: correr · F: curva · Q: dash para o cursor" : " · Empurre o disco para marcar gols"}</span>
+        <span>WASD ou setas: mover {game === "haxball" ? " · Clique ou Espaço: chute · Shift: correr · Q: dash para o cursor" : " · Empurre o disco para marcar gols"}</span>
         {networkError && <p className="game-error" role="status">{networkError}</p>}
       </div>
     </div>

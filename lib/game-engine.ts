@@ -320,6 +320,11 @@ function steer(player: GameActor, input: GameInput, dt: number, game: GameId) {
   let sprinting = false;
   player.dashCooldown = Math.max(0, player.dashCooldown - dt);
   if (game === "haxball" && !player.bot) {
+    // Direção atual do corpo: anda para onde aperta, sem depender da mira.
+    if (hasInput) {
+      player.facingX = ix / length;
+      player.facingY = iy / length;
+    }
     sprinting = input.sprint && hasInput && !player.sprintLock && player.stamina > 0;
     if (sprinting) {
       player.stamina = Math.max(0, player.stamina - 32 * dt);
@@ -331,13 +336,6 @@ function steer(player: GameActor, input: GameInput, dt: number, game: GameId) {
       if (player.stamina >= 25) player.sprintLock = false;
     }
     if (input.charging) {
-      const dx = input.aimX - player.x;
-      const dy = input.aimY - player.y;
-      const aimLength = Math.sqrt(dx * dx + dy * dy);
-      if (aimLength > 1) {
-        player.facingX = dx / aimLength;
-        player.facingY = dy / aimLength;
-      }
       player.aimX = input.aimX;
       player.aimY = input.aimY;
       player.charge = clamp(input.power, 0, 1);
@@ -363,14 +361,14 @@ function steer(player: GameActor, input: GameInput, dt: number, game: GameId) {
     }
   }
   const dashing = game === "haxball" && player.dashRemaining > 0;
-  const max = game === "haxball" ? (dashing ? 350 : player.bot ? 150 : sprinting ? 205 : 150) : 260;
+  const max = game === "haxball" ? (dashing ? 300 : player.bot ? 120 : sprinting ? 165 : 120) : 260;
   if (dashing) {
     player.vx = player.dashX * max;
     player.vy = player.dashY * max;
     player.dashRemaining = Math.max(0, player.dashRemaining - dt);
   } else {
     const reversing = ix * player.vx + iy * player.vy < -1;
-    const acceleration = game === "haxball" ? (reversing ? 1850 : 1350) : 2200;
+    const acceleration = game === "haxball" ? (reversing ? 1500 : 1100) : 2200;
     player.vx += (ix / length) * acceleration * dt;
     player.vy += (iy / length) * acceleration * dt;
     if (!hasInput) {
@@ -458,7 +456,7 @@ export function resolveKickDirection(player: Pick<GameActor, "x" | "y">, ball: P
   return { x: Math.cos(angle), y: Math.sin(angle) };
 }
 
-function collideCircles(a: GameObject, b: GameObject, radiusA: number, radiusB: number, massA: number, massB: number, restitution: number, ballBoost = false) {
+function collideCircles(a: GameObject, b: GameObject, radiusA: number, radiusB: number, massA: number, massB: number, restitution: number, ballBoostAmount = 0) {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
   const minimum = radiusA + radiusB;
@@ -482,9 +480,9 @@ function collideCircles(a: GameObject, b: GameObject, radiusA: number, radiusB: 
   a.vy -= impulse / massA * ny;
   b.vx += impulse / massB * nx;
   b.vy += impulse / massB * ny;
-  if (ballBoost) {
-    b.vx += a.vx * 0.18;
-    b.vy += a.vy * 0.18;
+  if (ballBoostAmount) {
+    b.vx += a.vx * ballBoostAmount;
+    b.vy += a.vy * ballBoostAmount;
   }
 }
 
@@ -511,6 +509,19 @@ export interface StepOptions {
    * divergem na linha de gol).
    */
   authoritative?: boolean;
+  /**
+   * Gol adiado para o replay: o motor avisa via `onGoal` quando a bola cruza
+   * a linha inteira, mas não marca nem gela — quem chama aplica o placar com
+   * `applyGoal()` depois do replay (rede 1s → replay → placar).
+   */
+  deferGoal?: boolean;
+  onGoal?: (team: GameTeam) => void;
+}
+
+/** Aplica um gol adiado (`deferGoal`): placar + gelo que termina no reset. */
+export function applyGoal(state: GameSnapshot, team: GameTeam) {
+  if (state.winner || state.freeze > 0) return;
+  scoreGoal(state, team);
 }
 
 export function stepGame(
@@ -540,7 +551,9 @@ export function stepGame(
   const max = isHaxball ? 1000 : 1050;
   const playerRadius = isHaxball ? 16 : 24;
   const playerMass = isHaxball ? 3 : 6;
-  const playerRest = isHaxball ? 0.6 : 0.95;
+  // Encostar no corpo não dispara a bola: restituição e impulso baixos.
+  const playerRest = isHaxball ? 0.5 : 0.95;
+  const touchBoost = isHaxball ? 0.1 : 0.18;
 
   // Amostra os inputs uma vez por tick (não por substep): corta ~3x o custo da
   // IA e o lixo de objetos sem mudar o comportamento em 16 ms.
@@ -605,7 +618,7 @@ export function stepGame(
     }
     for (let i = 0; i < state.players.length; i++) {
       const player = state.players[i];
-      collideCircles(player, ball, playerRadius, BALL_RADIUS, playerMass, 1, playerRest, true);
+      collideCircles(player, ball, playerRadius, BALL_RADIUS, playerMass, 1, playerRest, touchBoost);
       keepPlayerInBounds(player, state.game);
     }
     for (let i = 0; i < bounds.length; i++) collideCircleSegment(ball, BALL_RADIUS, bounds[i], fieldRest);
@@ -619,11 +632,17 @@ export function stepGame(
     }
     const goalThreshold = HALF_WIDTH + (isHaxball ? 11 : 4);
     if (ball.x < -goalThreshold && Math.abs(ball.y) < goalHalf - 11) {
-      if (authoritative) scoreGoal(state, "orange");
+      if (authoritative) {
+        if (options.deferGoal) options.onGoal?.("orange");
+        else scoreGoal(state, "orange");
+      }
       break;
     }
     if (ball.x > goalThreshold && Math.abs(ball.y) < goalHalf - 11) {
-      if (authoritative) scoreGoal(state, "blue");
+      if (authoritative) {
+        if (options.deferGoal) options.onGoal?.("blue");
+        else scoreGoal(state, "blue");
+      }
       break;
     }
   }
@@ -776,7 +795,7 @@ function drawNetMesh(
   ctx.restore();
 }
 
-function drawHaxballPitch(ctx: CanvasRenderingContext2D, ball: GameObject) {
+function paintHaxballStatic(ctx: CanvasRenderingContext2D) {
   // Entorno escuro + gramado com listras de corte (mow stripes).
   ctx.fillStyle = "#0d1a0f";
   ctx.fillRect(-HALF_WIDTH - 130, -HALF_HEIGHT - 130, FIELD_WIDTH + 260, FIELD_HEIGHT + 260);
@@ -785,6 +804,19 @@ function drawHaxballPitch(ctx: CanvasRenderingContext2D, ball: GameObject) {
   for (let i = 0; i < stripes; i++) {
     ctx.fillStyle = i % 2 === 0 ? "#2f9e44" : "#2a9140";
     ctx.fillRect(-HALF_WIDTH + i * stripeW, -HALF_HEIGHT, stripeW + 0.5, FIELD_HEIGHT);
+  }
+  // Textura de grama: milhares de fios determinísticos (LCG com seed fixa —
+  // o campo redesenha igual a cada resize, sem cintilar).
+  let seed = 987654321;
+  const rand = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  for (let i = 0; i < 4200; i++) {
+    const x = -HALF_WIDTH + rand() * FIELD_WIDTH;
+    const y = -HALF_HEIGHT + rand() * FIELD_HEIGHT;
+    ctx.fillStyle = rand() > 0.5 ? "rgba(18,84,32,0.12)" : "rgba(130,225,145,0.09)";
+    ctx.fillRect(x, y, 1 + rand() * 2, 1 + rand() * 1.5);
   }
   // Brilho sutil de cima para dar volume sem tirar o fosco do gramado.
   const sheen = ctx.createLinearGradient(0, -HALF_HEIGHT, 0, HALF_HEIGHT);
@@ -817,34 +849,39 @@ function drawHaxballPitch(ctx: CanvasRenderingContext2D, ball: GameObject) {
     ctx.lineWidth = 3.5;
     ctx.strokeRect(bigX, -160, 140, 320);
     ctx.strokeRect(smallX, -95, 55, 190);
+    const spotX = side * (HALF_WIDTH - 105);
     ctx.beginPath();
-    ctx.arc(side * (HALF_WIDTH - 105), 0, 4.5, 0, Math.PI * 2);
+    ctx.arc(spotX, 0, 4.5, 0, Math.PI * 2);
     ctx.fill();
+    // Meia-lua: termina exatamente na linha da área (105 + 52·cos θ = 140),
+    // então o traço nunca cruza nem vaza para dentro da área.
+    const arcHalf = Math.acos(35 / 52);
     ctx.beginPath();
-    ctx.arc(side * (HALF_WIDTH - 105), 0, 52, side < 0 ? -0.9 : Math.PI - 0.9, side < 0 ? 0.9 : Math.PI + 0.9);
+    if (side < 0) ctx.arc(spotX, 0, 52, -arcHalf, arcHalf);
+    else ctx.arc(spotX, 0, 52, Math.PI - arcHalf, Math.PI + arcHalf);
     ctx.stroke();
   }
-  // Cantos.
+  // Escanteios: só o quarto de círculo voltado para dentro do campo.
   ctx.lineWidth = 3;
   for (const sx of [-1, 1]) {
     for (const sy of [-1, 1]) {
+      const mid = Math.atan2(-sy, -sx);
       ctx.beginPath();
-      ctx.arc(sx * HALF_WIDTH, sy * HALF_HEIGHT, 14, 0, Math.PI * 2);
+      ctx.arc(sx * HALF_WIDTH, sy * HALF_HEIGHT, 14, mid - Math.PI / 4, mid + Math.PI / 4);
       ctx.stroke();
     }
   }
 
-  // Gols com rede quadriculada + barriga quando a bola encosta no pano.
+  // Redes chapadas na camada estática; a barriga do pano é redesenhada por
+  // cima a cada frame só enquanto a bola está na rede (ver drawGame).
   const goalHalf = GOAL_HALF.haxball;
   const depth = GOAL_DEPTH.haxball;
-  const leftBulge = netBulge(ball, -1);
-  const rightBulge = netBulge(ball, 1);
-  drawNetMesh(ctx, -HALF_WIDTH - depth - leftBulge, -goalHalf, depth + leftBulge, goalHalf * 2, leftBulge, true);
-  drawNetMesh(ctx, HALF_WIDTH, -goalHalf, depth + rightBulge, goalHalf * 2, rightBulge, false);
+  drawNetMesh(ctx, -HALF_WIDTH - depth, -goalHalf, depth, goalHalf * 2, 0, true);
+  drawNetMesh(ctx, HALF_WIDTH, -goalHalf, depth, goalHalf * 2, 0, false);
   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = 3;
-  ctx.strokeRect(-HALF_WIDTH - depth - leftBulge, -goalHalf, depth + leftBulge, goalHalf * 2);
-  ctx.strokeRect(HALF_WIDTH, -goalHalf, depth + rightBulge, goalHalf * 2);
+  ctx.strokeRect(-HALF_WIDTH - depth, -goalHalf, depth, goalHalf * 2);
+  ctx.strokeRect(HALF_WIDTH, -goalHalf, depth, goalHalf * 2);
 
   // Traves e travessões internos.
   for (const x of [-HALF_WIDTH, HALF_WIDTH]) {
@@ -866,10 +903,12 @@ function drawHaxballPitch(ctx: CanvasRenderingContext2D, ball: GameObject) {
   }
 }
 
-function drawHockeyRink(ctx: CanvasRenderingContext2D) {
-  const RED = "#c8102e";
-  const BLUE = "#0b3d91";
-  const BLACK = "#111111";
+function paintHockeyStatic(ctx: CanvasRenderingContext2D) {
+  const RED = "rgba(200,16,46,0.55)";
+  const RED_SOLID = "rgba(200,16,46,0.8)";
+  const BLUE = "rgba(11,61,145,0.6)";
+  const BLUE_SOLID = "rgba(11,61,145,0.85)";
+  const BLACK = "rgba(17,17,17,0.6)";
   const ICE = "#edf0f2";
   // Gelo fosco: chapado, sem gradiente brilhante.
   ctx.fillStyle = "#101418";
@@ -881,7 +920,7 @@ function drawHockeyRink(ctx: CanvasRenderingContext2D) {
   ctx.fillRect(-HALF_WIDTH, -HALF_HEIGHT, FIELD_WIDTH, 26);
 
   // Tabelas: contorno preto + rodapé amarelo (kickplate).
-  ctx.strokeStyle = BLACK;
+  ctx.strokeStyle = "#111111";
   ctx.lineWidth = 10;
   ctx.strokeRect(-HALF_WIDTH, -HALF_HEIGHT, FIELD_WIDTH, FIELD_HEIGHT);
   ctx.strokeStyle = "#e8b921";
@@ -896,7 +935,7 @@ function drawHockeyRink(ctx: CanvasRenderingContext2D) {
   ctx.beginPath();
   ctx.arc(0, 0, 70, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.fillStyle = BLUE;
+  ctx.fillStyle = BLUE_SOLID;
   ctx.beginPath();
   ctx.arc(0, 0, 7, 0, Math.PI * 2);
   ctx.fill();
@@ -905,24 +944,29 @@ function drawHockeyRink(ctx: CanvasRenderingContext2D) {
   ctx.fillStyle = BLUE;
   for (const x of [-160, 160]) ctx.fillRect(x - 8, -HALF_HEIGHT, 16, FIELD_HEIGHT);
 
-  // Linhas de gol vermelhas + creases azuis claros.
+  // Linhas de gol coladas no fundo + crease em frente à boca do gol.
+  // O crease é recortado no retângulo do rinque: a tinta passa por baixo da
+  // rede sem vazar para fora das tabelas.
   ctx.fillStyle = RED;
-  for (const x of [-440, 440]) ctx.fillRect(x - 2, -HALF_HEIGHT, 4, FIELD_HEIGHT);
+  for (const x of [-492, 492]) ctx.fillRect(x - 2, -HALF_HEIGHT, 4, FIELD_HEIGHT);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(-HALF_WIDTH, -HALF_HEIGHT, FIELD_WIDTH, FIELD_HEIGHT);
+  ctx.clip();
   for (const side of [-1, 1] as const) {
-    const gx = side * HALF_WIDTH;
-    const cx = side * (HALF_WIDTH - 22);
-    ctx.fillStyle = "rgba(120,180,230,0.85)";
+    const cx = side * (HALF_WIDTH - 20);
+    ctx.fillStyle = "rgba(120,180,230,0.45)";
     ctx.beginPath();
-    ctx.arc(cx, 0, 46, side < 0 ? -Math.PI / 2 : Math.PI / 2, side < 0 ? Math.PI / 2 : Math.PI * 1.5);
+    ctx.arc(cx, 0, 32, side < 0 ? -Math.PI / 2 : Math.PI / 2, side < 0 ? Math.PI / 2 : Math.PI * 1.5);
     ctx.closePath();
     ctx.fill();
-    ctx.strokeStyle = RED;
+    ctx.strokeStyle = RED_SOLID;
     ctx.lineWidth = 3;
     ctx.stroke();
-    void gx;
   }
+  ctx.restore();
 
-  // Círculos de faceoff: vermelhos com ponto central + marcas pretas de hash.
+  // Círculos de faceoff: vermelhos com ponto central + marcas de hash.
   const spots: Array<[number, number]> = [[-300, -160], [-300, 160], [300, -160], [300, 160]];
   for (const [fx, fy] of spots) {
     ctx.strokeStyle = RED;
@@ -930,7 +974,7 @@ function drawHockeyRink(ctx: CanvasRenderingContext2D) {
     ctx.beginPath();
     ctx.arc(fx, fy, 56, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillStyle = RED;
+    ctx.fillStyle = RED_SOLID;
     ctx.beginPath();
     ctx.arc(fx, fy, 6, 0, Math.PI * 2);
     ctx.fill();
@@ -946,7 +990,7 @@ function drawHockeyRink(ctx: CanvasRenderingContext2D) {
     }
   }
   // Pontos de faceoff da zona neutra.
-  ctx.fillStyle = RED;
+  ctx.fillStyle = RED_SOLID;
   for (const [fx, fy] of [[-90, -160], [-90, 160], [90, -160], [90, 160]] as Array<[number, number]>) {
     ctx.beginPath();
     ctx.arc(fx, fy, 5, 0, Math.PI * 2);
@@ -977,16 +1021,43 @@ function drawHockeyRink(ctx: CanvasRenderingContext2D) {
     }
     ctx.stroke();
     ctx.restore();
-    ctx.strokeStyle = RED;
+    ctx.strokeStyle = RED_SOLID;
     ctx.lineWidth = 4;
     ctx.strokeRect(x, -goalHalf, depth, goalHalf * 2);
-    ctx.fillStyle = RED;
+    ctx.fillStyle = RED_SOLID;
     for (const y of [-goalHalf, goalHalf]) {
       ctx.beginPath();
       ctx.arc(side * HALF_WIDTH, y, 5, 0, Math.PI * 2);
       ctx.fill();
     }
   }
+}
+
+// Camada estática do campo: pintada uma vez por (jogo × tamanho) e copiada
+// com um único drawImage por frame. É o que tira o render de ~400 operações
+// vetoriais por frame para ~40 — o ganho que leva o FPS de volta aos 60+.
+const fieldLayers = new Map<string, HTMLCanvasElement>();
+
+function fieldLayer(game: GameId, w: number, h: number): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const key = `${game}-${w}x${h}`;
+  const cached = fieldLayers.get(key);
+  if (cached) return cached;
+  if (fieldLayers.size >= 4) {
+    const oldest = fieldLayers.keys().next();
+    if (!oldest.done) fieldLayers.delete(oldest.value);
+  }
+  const layer = document.createElement("canvas");
+  layer.width = Math.max(1, Math.round(w));
+  layer.height = Math.max(1, Math.round(h));
+  const g = layer.getContext("2d");
+  if (!g) return null;
+  g.translate(layer.width / 2, layer.height / 2);
+  g.scale(layer.width / 1160, layer.height / VIEW_HEIGHT);
+  if (game === "haxball") paintHaxballStatic(g);
+  else paintHockeyStatic(g);
+  fieldLayers.set(key, layer);
+  return layer;
 }
 
 export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, localPlayerId: string) {
@@ -999,59 +1070,25 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
   ctx.translate(width / 2, height / 2);
   ctx.scale(scale, scale);
 
-  if (state.game === "haxball") drawHaxballPitch(ctx, state.ball);
-  else drawHockeyRink(ctx);
+  const layer = fieldLayer(state.game, width, height);
+  if (layer) ctx.drawImage(layer, -580, -380, 1160, 760);
+  else if (state.game === "haxball") paintHaxballStatic(ctx);
+  else paintHockeyStatic(ctx);
 
-  if (state.game === "haxball") {
-    for (const player of state.players) {
-      if (!player.bot && player.charge > 0) {
-        const dx = player.aimX - player.x;
-        const dy = player.aimY - player.y;
-        const direction = Math.sqrt(dx * dx + dy * dy) || 1;
-        const bdx = state.ball.x - player.x;
-        const bdy = state.ball.y - player.y;
-        const closeToBall = bdx * bdx + bdy * bdy <= 41 * 41;
-        const legal = closeToBall ? resolveKickDirection(player, state.ball, player.aimX, player.aimY) : null;
-        if (closeToBall && !legal) continue;
-        const ux = legal?.x ?? dx / direction;
-        const uy = legal?.y ?? dy / direction;
-        let px = closeToBall ? state.ball.x : player.x + ux * 28;
-        let py = closeToBall ? state.ball.y : player.y + uy * 28;
-        let vx = ux * 680 * (0.35 + 0.65 * player.charge);
-        let vy = uy * 680 * (0.35 + 0.65 * player.charge);
-        let spin = player.curve ? 8 : 0;
-        ctx.save();
-        ctx.strokeStyle = player.team === "blue" ? "#ffd166" : "#ffffff";
-        ctx.lineWidth = 2.5;
-        ctx.setLineDash([8, 6]);
-        ctx.beginPath(); ctx.moveTo(px, py);
-        for (let point = 0; point < 24; point++) {
-          const speedSq = vx * vx + vy * vy;
-          if (spin && speedSq > 400) {
-            const speed = Math.sqrt(speedSq);
-            const curve = (spin * 42) / 60 / speed;
-            vx += -vy * curve;
-            vy += vx * curve;
-            spin *= 1 - 1.1 / 60;
-          }
-          vx *= 1 - 0.7 / 60;
-          vy *= 1 - 0.7 / 60;
-          px += vx / 60;
-          py += vy / 60;
-          ctx.lineTo(px, py);
-        }
-        ctx.stroke();
-        ctx.setLineDash([]);
-        const tangent = Math.atan2(vy, vx);
-        ctx.beginPath();
-        ctx.moveTo(px, py);
-        ctx.lineTo(px - Math.cos(tangent - 0.5) * 12, py - Math.sin(tangent - 0.5) * 12);
-        ctx.moveTo(px, py);
-        ctx.lineTo(px - Math.cos(tangent + 0.5) * 12, py - Math.sin(tangent + 0.5) * 12);
-        ctx.stroke();
-        ctx.restore();
-      }
-    }
+  // Barriga da rede: só a rede ocupada é redesenhada por cima, e só enquanto
+  // a bola está no pano.
+  if (state.game === "haxball"
+    && Math.abs(state.ball.x) > HALF_WIDTH
+    && Math.abs(state.ball.y) < GOAL_HALF.haxball) {
+    const side = state.ball.x > 0 ? 1 : -1;
+    const depth = GOAL_DEPTH.haxball;
+    const goalHalf = GOAL_HALF.haxball;
+    const bulge = netBulge(state.ball, side as -1 | 1);
+    const x = side < 0 ? -HALF_WIDTH - depth - bulge : HALF_WIDTH;
+    drawNetMesh(ctx, x, -goalHalf, depth + bulge, goalHalf * 2, bulge, side < 0);
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x, -goalHalf, depth + bulge, goalHalf * 2);
   }
 
   const onIce = state.game === "hoquei";
@@ -1059,8 +1096,11 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
     const radius = onIce ? 24 : 16;
     ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2);
     ctx.fillStyle = player.team === "blue" ? "#fffdf9" : "#ff8d4f"; ctx.fill();
-    ctx.lineWidth = player.id === localPlayerId ? 4 : 2;
-    ctx.strokeStyle = player.id === localPlayerId ? (onIce ? "#0b3d91" : "#ffd166") : "#050505"; ctx.stroke();
+    if (player.id === localPlayerId) {
+      ctx.beginPath(); ctx.arc(player.x, player.y, radius + 4, 0, Math.PI * 2);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = onIce ? "#0b3d91" : "#ffd166"; ctx.stroke();
+    }
     ctx.fillStyle = player.team === "blue" ? "#050505" : "#120c08";
     ctx.font = "bold 10px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(player.bot ? "B" : "P", player.x, player.y + 1);
@@ -1108,11 +1148,9 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
       }
       ctx.closePath(); ctx.fill();
     }
-    ctx.beginPath(); ctx.arc(0, 0, 10.2, 0, Math.PI * 2); ctx.strokeStyle = "#080808"; ctx.lineWidth = 1.6; ctx.stroke();
   } else {
     ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2);
-    ctx.fillStyle = "#ff8d4f"; ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = "#050505"; ctx.stroke();
+    ctx.fillStyle = "#141414"; ctx.fill();
   }
   ctx.restore();
   ctx.restore();
