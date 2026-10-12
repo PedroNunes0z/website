@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import { gameAudio } from "@/lib/game-audio";
 import { CountdownOverlay, useCountdown } from "@/components/countdown-overlay";
 import {
+  applyGoal,
   createBotGame,
   FULL_FIELD,
   stepGame,
@@ -159,7 +160,15 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             input.sprint = !!k.SHIFT?.isDown;
           }
           if (!countdownFrozen.current && !pausedGame) {
-            stepGame(state, { local: input }, lastKicks, dt);
+            stepGame(state, { local: input }, lastKicks, dt, {
+              deferGoal: true,
+              onGoal: (team) => {
+                applyGoal(state, team);
+                if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+                  this.cameras.main.shake(350, 0.012);
+                }
+              },
+            });
             const me = state.players.find((p) => p.id === "local");
             const dashing = isHaxball && !!me && me.dashRemaining > 0;
             if (dashing && !prevDash) gameAudio.play("dash", 0.8, game);

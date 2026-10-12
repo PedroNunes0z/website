@@ -75,6 +75,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   const postSfxAtRef = useRef(0);
   const prevDashRef = useRef(false);
   const matchPointRef = useRef(false);
+  const traumaRef = useRef(0);
   const pausedRef = useRef(false);
   const droppedRef = useRef(0);
   // Degradação automática de qualidade quando o render não acompanha.
@@ -131,6 +132,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     replayRef.current = null;
     matchPointRef.current = false;
     gameAudio.stopStomps();
+    traumaRef.current = 0;
     if (mode === "bot") startCountdown(600);
   }, [game, mode, bots, roomId, roomStatus, startCountdown]);
 
@@ -195,6 +197,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     matchPointRef.current = false;
     pausedRef.current = false;
     setPaused(false);
+    traumaRef.current = 0;
     setGoalNotice(null);
     setReplayBadge(false);
     gameAudio.stopStomps();
@@ -372,6 +375,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         const st = stateRef.current;
         const goalAt = st.elapsed;
         applyGoal(st, team);
+        if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) traumaRef.current = 1;
         const kept = bufferRef.current.filter((frame) => frame.t >= goalAt - 4);
         const usable = kept.length > 1 ? kept : bufferRef.current.slice(-30);
         const span = usable.length > 1 ? usable[usable.length - 1].t - usable[0].t : 1;
@@ -418,6 +422,13 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         y: loY > hiY ? 0 : Math.max(loY, Math.min(hiY, camRef.current.y)),
         zoom,
       };
+      // Tremor do gol: impulso que decai em ~1s, sem mexer no replay.
+      if (traumaRef.current > 0 && phaseRef.current !== "replay") {
+        traumaRef.current = Math.max(0, traumaRef.current - dt * 1.4);
+        const shove = traumaRef.current * traumaRef.current * 14;
+        cam.x += shove * (Math.random() * 2 - 1);
+        cam.y += shove * (Math.random() * 2 - 1);
+      }
 
       // Pausado: congela tudo e só desenha o quadro parado.
       if (pausedRef.current) {
