@@ -473,6 +473,11 @@ img { max-width: 100%; }
 .futbr-back-row button:hover { color: var(--game-accent); }
 .futbr-start-row { margin-bottom: 1.4rem; }
 .futbr-start-row .game-primary-button { width: 100%; min-height: 52px; font-size: .75rem; }
+.futbr-page { min-height: 100dvh; background: radial-gradient(1200px 600px at 50% -10%, #0e3d22 0%, #07130c 55%, #040805 100%); }
+.futbr-page .game-experience { padding-top: 2rem; }
+.futbr-name-row { display: flex; flex-direction: column; gap: .5rem; max-width: 340px; margin: 1.4rem auto 0; color: var(--muted); font-size: .65rem; text-transform: uppercase; letter-spacing: .08em; text-align: left; }
+.futbr-name-row input { padding: .8rem .9rem; border: 1px solid #4b413a; background: rgba(0,0,0,.5); color: var(--white); font-size: .85rem; outline: none; text-align: center; }
+.futbr-name-row input:focus { border-color: var(--game-accent, #ffd400); }
 .game-room-list-head button, .game-board-footer button, .game-room-actions button { display: inline-flex; align-items: center; gap: .45rem; border: 0; background: none; color: var(--orange); font-size: .7rem; cursor: pointer; }
 .game-room-list-head button:hover, .game-board-footer button:hover, .game-room-actions button:hover { color: var(--white); }
 .game-room-card { padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; border-bottom: 1px solid var(--line); }

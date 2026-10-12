@@ -77,17 +77,17 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
       class ArenaScene extends Phaser.Scene {
         private gfx!: Phaser.GameObjects.Graphics;
         private keys!: Record<string, Phaser.Input.Keyboard.Key>;
-        private flagTexts: Phaser.GameObjects.Text[] = [];
+        private starTexts: Phaser.GameObjects.Text[] = [];
 
         create() {
           this.gfx = this.add.graphics();
-          const flagSize = isHaxball ? "15px" : "21px";
-          for (const p of state.players) {
-            const text = this.add.text(0, 0, state.flags[p.team] ?? "", {
-              fontSize: flagSize,
-              fontFamily: '"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",monospace',
+          for (let i = 0; i < state.players.length; i++) {
+            const text = this.add.text(0, 0, "★", {
+              fontSize: isHaxball ? "13px" : "19px",
+              fontFamily: "monospace",
+              color: isHaxball ? "#ffd166" : "#ffffff",
             }).setOrigin(0.5);
-            this.flagTexts.push(text);
+            this.starTexts.push(text);
           }
           const kb = this.input.keyboard;
           if (kb) {
@@ -161,7 +161,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
               g.lineStyle(3, s.game === "haxball" ? 0xffd166 : 0xffffff, 1);
               g.strokeCircle(px, py, r + 4);
             }
-            this.flagTexts[i]?.setPosition(px, py + 1);
+            this.starTexts[i]?.setPosition(px, py + 1);
           }
           // Bola / disco sem contorno.
           const bx = s.ball.x + WORLD_W / 2;

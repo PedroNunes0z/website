@@ -56,8 +56,6 @@ export interface GameObject {
 export interface GameSnapshot {
   game: GameId;
   field: FieldSize;
-  /** Bandeira (emoji) sorteada por time em cada partida. */
-  flags: Record<GameTeam, string>;
   players: GameActor[];
   ball: GameObject;
   score: Record<GameTeam, number>;
@@ -65,24 +63,13 @@ export interface GameSnapshot {
   freeze: number;
   winner: GameTeam | null;
   revision: number;
+  /** Cruzamento aguardando confirmação: só vira gol se a bola ficar dentro. */
+  goalPending: { team: GameTeam; time: number } | null;
 }
 
 export interface BotCounts {
   blue: number;
   orange: number;
-}
-
-const TEAM_FLAGS = [
-  "🇧🇷", "🇩🇪", "🇫🇷", "🇦🇷", "🇪🇸", "🇮🇹", "🇳🇱", "🇵🇹",
-  "🇺🇾", "🇨🇴", "🇲🇽", "🇺🇸", "🇯🇵", "🇰🇷", "🇸🇳", "🇲🇦",
-  "🇭🇷", "🇧🇪", "🇨🇭", "🇸🇪",
-];
-
-/** Sorteia uma bandeira distinta por time para a partida. */
-export function pickTeamFlags(): Record<GameTeam, string> {
-  const a = Math.floor(Math.random() * TEAM_FLAGS.length);
-  const b = (a + 1 + Math.floor(Math.random() * (TEAM_FLAGS.length - 1))) % TEAM_FLAGS.length;
-  return { blue: TEAM_FLAGS[a], orange: TEAM_FLAGS[b] };
 }
 
 const FIELD_WIDTH = 1000;
@@ -295,14 +282,14 @@ export function createBotGame(game: GameId, bots: BotCounts, field?: FieldSize):
   }
   const sized = field ?? fieldFor(game, players.length);
   replacePositions(players, game, sized);
-  return { game, field: sized, flags: pickTeamFlags(), players, ball: { x: 0, y: 0, vx: 0, vy: 0, rotation: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
+  return { game, field: sized, goalPending: null, players, ball: { x: 0, y: 0, vx: 0, vy: 0, rotation: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
 }
 
 export function createOnlineGame(game: GameId, roster: GameRoomPlayer[], field?: FieldSize): GameSnapshot {
   const sized = field ?? fieldFor(game, Math.max(roster.length, 1));
   const indexes: Record<GameTeam, number> = { blue: 0, orange: 0 };
   const players = roster.map((player) => actor(player.id, player.name, player.team, indexes[player.team]++, game, false, sized.w, sized.h));
-  return { game, field: sized, flags: pickTeamFlags(), players, ball: { x: 0, y: 0, vx: 0, vy: 0, rotation: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
+  return { game, field: sized, goalPending: null, players, ball: { x: 0, y: 0, vx: 0, vy: 0, rotation: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
 }
 
 function replacePositions(players: GameActor[], game: GameId, field: FieldSize) {
@@ -327,6 +314,7 @@ export function updateOnlineRoster(state: GameSnapshot, roster: GameRoomPlayer[]
 }
 
 function resetPositions(state: GameSnapshot) {
+  state.goalPending = null;
   const indexes: Record<GameTeam, number> = { blue: 0, orange: 0 };
   state.players.forEach((player) => {
     const position = positionFor(player.team, indexes[player.team]++, state.game, state.field.w, state.field.h);
@@ -629,7 +617,12 @@ export interface StepOptions {
    */
   deferGoal?: boolean;
   onGoal?: (team: GameTeam) => void;
+  /** Avisa no instante em que a bola cruza a linha (antes da espera). */
+  onCross?: (team: GameTeam) => void;
 }
+
+/** Espera após o cruzamento: o gol só vale se a bola ficar dentro da rede. */
+const GOAL_DWELL = 0.8;
 
 /** Aplica um gol adiado (`deferGoal`): placar + gelo que termina no reset. */
 export function applyGoal(state: GameSnapshot, team: GameTeam) {
@@ -671,6 +664,28 @@ export function stepGame(
   // Encostar tem peso: restituição e impulso que dão sensação de contato.
   const playerRest = isHaxball ? 0.55 : 0.95;
   const touchBoost = isHaxball ? 0.14 : 0.18;
+
+  const goalThreshold = mouth + BALL_RADIUS;
+  const goalOpen = Math.abs(state.ball.y) < goalHalf - BALL_RADIUS;
+
+  // Gol com espera: a bola precisa ficar inteira além da boca pela espera.
+  // Se sair de volta antes disso, segue o jogo sem placar e sem parar.
+  if (state.goalPending) {
+    const pending = state.goalPending;
+    const beyond = pending.team === "orange" ? state.ball.x < -goalThreshold : state.ball.x > goalThreshold;
+    if (!beyond || !goalOpen) {
+      state.goalPending = null;
+    } else {
+      pending.time += delta;
+      if (pending.time >= GOAL_DWELL) {
+        state.goalPending = null;
+        if (authoritative) {
+          if (options.deferGoal) options.onGoal?.(pending.team);
+          else scoreGoal(state, pending.team);
+        }
+      }
+    }
+  }
 
   // Amostra os inputs uma vez por tick (não por substep): corta ~3x o custo da
   // IA e o lixo de objetos sem mudar o comportamento em 16 ms.
@@ -758,19 +773,15 @@ export function stepGame(
       ball.vx *= scale;
       ball.vy *= scale;
     }
-    // Gol só com a bola inteira além da boca (centro passa boca + raio).
-    const goalThreshold = mouth + BALL_RADIUS;
-    if (ball.x < -goalThreshold && Math.abs(ball.y) < goalHalf - 11) {
-      if (authoritative) {
-        if (options.deferGoal) options.onGoal?.("orange");
-        else scoreGoal(state, "orange");
-      }
-      break;
-    }
-    if (ball.x > goalThreshold && Math.abs(ball.y) < goalHalf - 11) {
-      if (authoritative) {
-        if (options.deferGoal) options.onGoal?.("blue");
-        else scoreGoal(state, "blue");
+    // Cruzamento integral avisa e abre a espera; o placar sai depois, no
+    // topo do passo, se a bola continuar dentro. Sem parar o jogo na hora.
+    const crossedLeft = ball.x < -goalThreshold && Math.abs(ball.y) < goalHalf - BALL_RADIUS;
+    const crossedRight = ball.x > goalThreshold && Math.abs(ball.y) < goalHalf - BALL_RADIUS;
+    const crossed = crossedLeft ? "orange" as const : crossedRight ? "blue" as const : null;
+    if (crossed) {
+      if (authoritative && !state.goalPending) {
+        state.goalPending = { team: crossed, time: 0 };
+        options.onCross?.(crossed);
       }
       break;
     }
@@ -812,7 +823,6 @@ export function reconcileAuthoritativeState(
   const restarted = target.elapsed + 1 < local.elapsed;
   local.score.blue = target.score.blue;
   local.score.orange = target.score.orange;
-  if (target.flags) local.flags = { ...target.flags };
   local.winner = target.winner;
   local.freeze = restarted ? target.freeze : Math.max(local.freeze, target.freeze);
   local.elapsed = restarted ? target.elapsed : Math.max(local.elapsed, target.elapsed);
@@ -1257,6 +1267,38 @@ function labelSprite(text: string, font: string, fill: string): { img: HTMLCanva
   return sprite;
 }
 
+function drawShield(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string, star: string) {
+  ctx.beginPath();
+  ctx.moveTo(x, y - r);
+  ctx.lineTo(x + r * 0.85, y - r * 0.45);
+  ctx.lineTo(x + r * 0.85, y + r * 0.25);
+  ctx.quadraticCurveTo(x + r * 0.85, y + r * 0.75, x, y + r);
+  ctx.quadraticCurveTo(x - r * 0.85, y + r * 0.75, x - r * 0.85, y + r * 0.25);
+  ctx.lineTo(x - r * 0.85, y - r * 0.45);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#ffffff";
+  ctx.stroke();
+  const sr = r * 0.48;
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    const outer = -Math.PI / 2 + (i * Math.PI * 2) / 5;
+    const inner = outer + Math.PI / 5;
+    const ox = x + Math.cos(outer) * sr;
+    const oy = y + Math.sin(outer) * sr;
+    const ix = x + Math.cos(inner) * sr * 0.45;
+    const iy = y + Math.sin(inner) * sr * 0.45;
+    if (i === 0) ctx.moveTo(ox, oy);
+    else ctx.lineTo(ox, oy);
+    ctx.lineTo(ix, iy);
+  }
+  ctx.closePath();
+  ctx.fillStyle = star;
+  ctx.fill();
+}
+
 export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, localPlayerId: string, opts: DrawOptions = {}) {
   const { width, height } = ctx.canvas;
   const scale = Math.min(width / 1160, height / VIEW_HEIGHT);
@@ -1297,7 +1339,6 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
   const onIce = state.game === "hoquei";
   const homeFill = onIce ? "#2456e6" : "#fffdf9";
   const awayFill = onIce ? "#d7263d" : "#ff8d4f";
-  const emblemFont = `bold ${onIce ? 20 : 14}px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",monospace`;
   for (const player of state.players) {
     const radius = onIce ? 24 : 16;
     ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2);
@@ -1311,9 +1352,10 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
       ctx.lineWidth = 3;
       ctx.strokeStyle = onIce ? "#ffffff" : "#ffd166"; ctx.stroke();
     }
-    // Emblema do time: bandeira sorteada na partida, no lugar da letra.
-    const emblem = labelSprite(state.flags?.[player.team] ?? (player.bot ? "B" : "P"), emblemFont, "");
-    if (emblem) ctx.drawImage(emblem.img, player.x - emblem.w / 2, player.y + 1 - emblem.h / 2, emblem.w, emblem.h);
+    // Emblema do time: escudo com estrela em contraste com o uniforme.
+    // Vetorial, então rende igual em qualquer sistema, sem fonte emoji.
+    const teamFill = player.team === "blue" ? homeFill : awayFill;
+    drawShield(ctx, player.x, player.y + 1, radius * 0.62, onIce ? "#ffffff" : "#14532d", onIce ? teamFill : "#ffd166");
     if (state.game === "haxball" && player.id === localPlayerId) {
       const barWidth = 42;
       ctx.fillStyle = "rgba(0,0,0,.8)";

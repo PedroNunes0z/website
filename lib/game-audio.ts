@@ -22,7 +22,7 @@
  * `preload()` busca e decodifica cedo, sem precisar de gesto.
  */
 
-type SfxKind = "kick" | "wall" | "post" | "goal" | "dash" | "net" | "commentary" | "whistleStart" | "whistleEnd";
+type SfxKind = "kick" | "wall" | "post" | "goal" | "dash" | "net" | "commentary" | "whistleStart" | "whistleEnd" | "ui";
 type GameKind = "haxball" | "hoquei";
 
 const FILES = {
@@ -35,12 +35,14 @@ const FILES = {
   whistleStart: "/games/sounds/one-metal-whistle.mp3",
   whistleStartAlt: "/games/sounds/metal-whistle.mp3",
   whistleEnd: "/games/sounds/end-metal-whistle.mp3",
-  commentaryA: "/games/sounds/football-commentary-with-goal-scored.mp3",
-  commentaryB: "/games/sounds/football-commentary-with-goal-scored-1.mp3",
+  commentaryA: "/games/sounds/narracao-gol-1.mp3",
+  commentaryB: "/games/sounds/narracao-gol-2.mp3",
+  crowdGoal: "/games/sounds/torcida-durante-o-gol.mp3",
   stadium: "/games/sounds/stadium.mp3",
   stadiumGoal: "/games/sounds/stadium2.mp3",
   stomps: "/games/sounds/powerful-stomps-claps-cheering-sport-rhythmic-applause.mp3",
   menuTheme: "/games/sounds/menu-theme-music.mp3",
+  ui: "/games/sounds/button-play-sound.mp3",
 } as const;
 
 const MUTE_KEY = "pedro-games-muted";
@@ -59,9 +61,8 @@ class GameAudio {
   private buffers = new Map<string, AudioBuffer>();
   private loading: Promise<void> | null = null;
   private dashFlip = false;
-  private commentaryFlip = false;
   private muted = false;
-  private volume = 0.8;
+  private volume = 0.75;
 
   constructor() {
     if (typeof window !== "undefined") {
@@ -278,14 +279,17 @@ class GameAudio {
     }
   }
 
-  /** Gol: rede, narração alternada, festa da torcida e fundo que incha e volta. */
+  /** Gol: narração sorteada, festa da torcida e fundo que incha e volta. */
   private cheer(): void {
     if (!this.ctx || this.muted) return;
-    this.playSample("net", jitter(1, 0.04), 0.9);
-    this.commentaryFlip = !this.commentaryFlip;
-    this.playSample(this.commentaryFlip ? "commentaryA" : "commentaryB", jitter(1, 0.02), 0.9, undefined, 0.15);
-    this.playSample("stadiumGoal", jitter(1, 0.03), 0.8);
-    this.playSample("stomps", jitter(1, 0.04), 0.45, undefined, 0.35);
+    if (Math.random() < 0.5) {
+      this.playSample("commentaryA", jitter(1, 0.02), 0.9, undefined, 0.15);
+    } else {
+      this.playSample("commentaryB", jitter(1, 0.02), 0.9, undefined, 0.15);
+    }
+    this.playSample("crowdGoal", jitter(1, 0.03), 0.85, undefined, 0.1);
+    this.playSample("stadiumGoal", jitter(1, 0.03), 0.7);
+    this.playSample("stomps", jitter(1, 0.04), 0.4, undefined, 0.35);
     if (this.ctx && this.crowd) {
       const now = this.ctx.currentTime;
       this.crowd.gain.cancelScheduledValues(now);
@@ -335,13 +339,19 @@ class GameAudio {
         }
         break;
       case "net":
-        if (!this.playSample("net", jitter(1, 0.04), 0.9 * power)) {
-          this.noiseHit(0.15, 800, 0.5 * power);
+        if (!this.playSample("net", jitter(1, 0.04), 1.0 * power)) {
+          this.noiseHit(0.2, 1000, 0.6 * power);
         }
         break;
       case "commentary":
-        this.commentaryFlip = !this.commentaryFlip;
-        this.playSample(this.commentaryFlip ? "commentaryA" : "commentaryB", jitter(1, 0.02), 0.9 * power);
+        if (Math.random() < 0.5) {
+          this.playSample("commentaryA", jitter(1, 0.02), 0.9 * power);
+        } else {
+          this.playSample("commentaryB", jitter(1, 0.02), 0.9 * power);
+        }
+        break;
+      case "ui":
+        this.playSample("ui", jitter(1, 0.03), 0.6 * power);
         break;
       case "whistleStart":
         if (!this.playSample("whistleStart", jitter(1, 0.02), 0.8 * power)) {

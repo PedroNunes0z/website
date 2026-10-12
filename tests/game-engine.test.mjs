@@ -144,6 +144,8 @@ test("haxball só conta gol quando a bola ultrapassa a linha inteira", () => {
   assert.equal(state.score.blue, 0);
   state.ball.x = 509;
   stepGame(state, {}, {}, 1 / 60);
+  assert.equal(state.score.blue, 0); // espera: na rede, sem placar ainda
+  for (let frame = 0; frame < 60; frame++) stepGame(state, {}, {}, 1 / 60);
   assert.equal(state.score.blue, 1);
 });
 
@@ -179,6 +181,8 @@ test("um gol atualiza o placar e pausa a partida", () => {
   state.ball.y = 0;
   state.ball.vx = 700;
   stepGame(state, {}, {}, 1 / 60);
+  assert.equal(state.score.blue, 0); // espera: disco na rede, sem placar ainda
+  for (let frame = 0; frame < 60; frame++) stepGame(state, {}, {}, 1 / 60);
   assert.equal(state.score.blue, 1);
   assert.ok(state.freeze > 0);
 });
@@ -216,7 +220,13 @@ test("gol adiado: onGoal avisa sem marcar nem gelar (replay decide o placar)", (
   state.ball.x = 512;
   state.ball.y = 0;
   let reported = null;
-  stepGame(state, {}, {}, 1 / 60, { deferGoal: true, onGoal: (team) => { reported = team; } });
+  let crossed = null;
+  const opts = { deferGoal: true, onGoal: (team) => { reported = team; }, onCross: (team) => { crossed = team; } };
+  stepGame(state, {}, {}, 1 / 60, opts);
+  assert.equal(crossed, "blue");
+  assert.equal(reported, null);
+  assert.equal(state.score.blue, 0);
+  for (let frame = 0; frame < 60; frame++) stepGame(state, {}, {}, 1 / 60, opts);
   assert.equal(reported, "blue");
   assert.equal(state.score.blue, 0);
   assert.equal(state.freeze, 0);
@@ -244,6 +254,8 @@ test("campo 2x2 é menor e o gol acompanha a boca da rede", () => {
   assert.equal(small.score.blue, 0);
   small.ball.x = hw + 9;
   stepGame(small, {}, {}, 1 / 60);
+  assert.equal(small.score.blue, 0); // espera antes do placar
+  for (let frame = 0; frame < 60; frame++) stepGame(small, {}, {}, 1 / 60);
   assert.equal(small.score.blue, 1);
 });
 
@@ -256,6 +268,22 @@ test("bot perseguidor ataca o gol adversário sem fazer gol contra", () => {
   for (let frame = 0; frame < 180; frame++) stepGame(state, {}, {}, 1 / 60);
   assert.ok(state.ball.x < 100 || state.score.orange === 1, `bola em ${state.ball.x}`);
   assert.equal(state.score.blue, 0);
+});
+
+test("bola que sai de volta antes da espera não vale gol", () => {
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
+  let crossed = 0;
+  const opts = { onCross: () => { crossed += 1; } };
+  state.ball.x = 509;
+  state.ball.y = 0;
+  state.ball.vx = -100;
+  state.ball.vy = 0;
+  stepGame(state, {}, {}, 1 / 60, opts);
+  assert.equal(crossed, 1);
+  for (let frame = 0; frame < 5; frame++) stepGame(state, {}, {}, 1 / 60, opts);
+  assert.equal(state.score.blue, 0);
+  assert.equal(state.score.orange, 0);
+  assert.equal(state.goalPending, null);
 });
 
 test("bola rápida empurra o jogador para trás", () => {
@@ -272,15 +300,6 @@ test("bola rápida empurra o jogador para trás", () => {
   for (let frame = 0; frame < 8; frame++) stepGame(state, {}, {}, 1 / 60);
   assert.ok(player.x > 0.5, `jogador em ${player.x}`);
   assert.ok(player.vx > 20, `vx em ${player.vx}`);
-});
-
-test("cada time ganha uma bandeira distinta na partida", () => {
-  for (let i = 0; i < 5; i++) {
-    const state = createBotGame("haxball", { blue: 1, orange: 1 }, FULL_FIELD);
-    assert.ok(state.flags.blue.length > 0);
-    assert.ok(state.flags.orange.length > 0);
-    assert.notEqual(state.flags.blue, state.flags.orange);
-  }
 });
 
 test("chute acende o clarão no jogador e na bola, que apaga sozinho", () => {

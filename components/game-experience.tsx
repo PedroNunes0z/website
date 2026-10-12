@@ -76,7 +76,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   // Degradação automática de qualidade quando o render não acompanha.
   const qualityRef = useRef({ scale: 1, slow: 0, fast: 0 });
 
-  const [hud, setHud] = useState({ blue: 0, orange: 0, elapsed: 0, winner: null as GameTeam | null, flags: { blue: "", orange: "" } as Record<GameTeam, string> });
+  const [hud, setHud] = useState({ blue: 0, orange: 0, elapsed: 0, winner: null as GameTeam | null });
   const [goalNotice, setGoalNotice] = useState<{ team: GameTeam; blue: number; orange: number; id: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [networkError, setNetworkError] = useState("");
@@ -314,7 +314,14 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         phaseRef.current = "board";
         boardUntilRef.current = now + 1800;
       };
-      const stepOptions = { authoritative, deferGoal: canReplay, onGoal: fireGoal };
+      const stepOptions = {
+        authoritative,
+        deferGoal: canReplay,
+        onGoal: fireGoal,
+        onCross: () => {
+          if (canReplay) gameAudio.play("net", 1, game);
+        },
+      };
 
       acc = Math.min(acc + dt, 0.25);
       let steps = 0;
@@ -454,7 +461,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
 
       if (now - hudTime > 180) {
         const state = stateRef.current;
-        setHud({ blue: state.score.blue, orange: state.score.orange, elapsed: state.elapsed, winner: state.winner, flags: state.flags });
+        setHud({ blue: state.score.blue, orange: state.score.orange, elapsed: state.elapsed, winner: state.winner });
         hudTime = now;
       }
 
@@ -757,7 +764,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? ", clique ou Espaço para chutar" : ""}`} onPointerDown={onPointerDown} onPointerMove={updateAim} onPointerEnter={updateAim} onContextMenu={(event) => event.preventDefault()} />
         <TouchControls game={game} touchRef={touchRef} keysRef={keysRef} onKick={() => triggerKick()} onDash={() => { inputRef.current.dashSeq += 1; }} />
         {mode === "online" && room?.status === "waiting" && <div className="game-waiting">{isHost ? "Convide jogadores e clique em Iniciar partida." : "Aguardando o dono iniciar a partida."}</div>}
-        {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong>{hud.flags[goalNotice.team]} {goalNotice.blue} <i>·</i> {goalNotice.orange}</strong><small>Equipe {teamName(game, goalNotice.team)}</small></div>}
+        {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong><span className={`score-dot ${goalNotice.team === "blue" ? homeDot : awayDot}`} /> {goalNotice.blue} <i>·</i> {goalNotice.orange}</strong><small>Equipe {teamName(game, goalNotice.team)}</small></div>}
         {hud.winner && !goalNotice && <div className="game-waiting">Equipe {teamName(game, hud.winner)} venceu.</div>}
       </div>
 
@@ -814,6 +821,8 @@ export function GameExperience({ game }: { game: GameId }) {
     }
   });
   const [volume, setVolume] = useState(() => gameAudio.getVolume());
+  // O FutBR tem página própria; os links de sala acompanham a página atual.
+  const gamePath = game === "haxball" ? "/futbr" : `/games/${game}`;
 
   const startMenuMusic = () => {
     gameAudio.ensure();
@@ -904,7 +913,7 @@ export function GameExperience({ game }: { game: GameId }) {
       console.log(`[Game] Room created: ${data.room.id}, isHost=true`);
       setRoom(data.room); setPlayerId(data.playerId ?? null); setOwnerToken(data.ownerToken ?? null);
       if (data.playerId) sessionStorage.setItem(`pedro-games:${game}:${data.room.id}`, JSON.stringify({ playerId: data.playerId, ownerToken: data.ownerToken }));
-      window.history.replaceState({}, "", `/games/${game}?room=${data.room.id}`);
+      window.history.replaceState({}, "", `${gamePath}?room=${data.room.id}`);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível criar a sala."); }
     finally { setBusy(false); }
   };
@@ -920,7 +929,7 @@ export function GameExperience({ game }: { game: GameId }) {
       console.log(`[Game] Joined room: ${id}, isHost=false`);
       setRoom(data.room); setPlayerId(data.player?.id ?? freshId); setOwnerToken(null);
       sessionStorage.setItem(`pedro-games:${game}:${data.room.id}`, JSON.stringify({ playerId: data.player?.id ?? freshId }));
-      window.history.replaceState({}, "", `/games/${game}?room=${data.room.id}`);
+      window.history.replaceState({}, "", `${gamePath}?room=${data.room.id}`);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível entrar na sala."); }
     finally { setBusy(false); }
   };
@@ -930,7 +939,7 @@ export function GameExperience({ game }: { game: GameId }) {
       await fetch(`/api/games/rooms/${room.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ game, playerId, ownerToken, action: "leave" }) }).catch(() => undefined);
       sessionStorage.removeItem(`pedro-games:${game}:${room.id}`);
     }
-    window.history.replaceState({}, "", `/games/${game}`);
+    window.history.replaceState({}, "", gamePath);
     setRoom(null); setPlayerId(null); setOwnerToken(null); void loadRooms();
     if (game === "haxball") setFutScreen("setup");
   };
@@ -953,9 +962,9 @@ export function GameExperience({ game }: { game: GameId }) {
       setPlayerId(null);
       setOwnerToken(null);
       setError("A sala expirou ou foi encerrada.");
-      window.history.replaceState({}, "", `/games/${game}`);
+      window.history.replaceState({}, "", gamePath);
     }
-  }, [game]);
+  }, [gamePath]);
 
   const max = game === "haxball" ? 5 : 1;
   // FutBR online: partida montada (dono iniciou ou convidado sincronizou)
@@ -964,6 +973,7 @@ export function GameExperience({ game }: { game: GameId }) {
   const showSetup = !isFutBR || screen === "setup";
   const showMatch = !isFutBR || screen === "match";
   const exitMatch = () => {
+    gameAudio.play("ui");
     if (mode === "online" && room) void leaveRoom();
     else setFutScreen("setup");
   };
@@ -989,10 +999,13 @@ export function GameExperience({ game }: { game: GameId }) {
           <p className="eyebrow"><span /> O futebol brasileiro de arena</p>
           <h2 className="futbr-logo">FutBR<span>.</span></h2>
           <p>Drible, chute no clique e até cinco por equipe. Escolha como entrar em campo.</p>
+          <label className="futbr-name-row">Seu nome
+            <input value={name} maxLength={20} onChange={(event) => { setName(event.target.value); try { sessionStorage.setItem("pedro-games-name", event.target.value); } catch { /* sem storage */ } }} placeholder="Como quer ser chamado?" />
+          </label>
           <div className="futbr-menu-buttons">
-            <button type="button" className="futbr-menu-primary" onClick={() => { setMode("bot"); setError(""); setFutScreen("setup"); }}>Jogar contra bots <ArrowRight size={16} /></button>
-            <button type="button" onClick={() => { setMode("online"); setError(""); setFutScreen("setup"); }}>Jogar online <ArrowRight size={16} /></button>
-            <button type="button" onClick={() => setFutScreen("settings")}>Configurações</button>
+            <button type="button" className="futbr-menu-primary" onClick={() => { gameAudio.play("ui"); setMode("bot"); setError(""); setFutScreen("setup"); }}>Jogar contra bots <ArrowRight size={16} /></button>
+            <button type="button" onClick={() => { gameAudio.play("ui"); setMode("online"); setError(""); setFutScreen("setup"); }}>Jogar online <ArrowRight size={16} /></button>
+            <button type="button" onClick={() => { gameAudio.play("ui"); setFutScreen("settings"); }}>Configurações</button>
           </div>
         </div>
       )}
@@ -1018,7 +1031,7 @@ export function GameExperience({ game }: { game: GameId }) {
             <label>Seu nome nas salas
               <input value={name} maxLength={20} onChange={(event) => { setName(event.target.value); try { sessionStorage.setItem("pedro-games-name", event.target.value); } catch { /* sem storage */ } }} placeholder="Seu nome" />
             </label>
-            <button type="button" onClick={() => setFutScreen("menu")}><ArrowLeft size={15} /> Voltar ao menu</button>
+            <button type="button" onClick={() => { gameAudio.play("ui"); setFutScreen("menu"); }}><ArrowLeft size={15} /> Voltar ao menu</button>
           </div>
         </div>
       )}
@@ -1125,7 +1138,7 @@ export function GameExperience({ game }: { game: GameId }) {
                   <p>{room.status === "waiting" ? "Aguardando o dono iniciar a partida." : "Partida em andamento."}</p>
                 </div>
                 <div className="game-room-actions">
-                  <button type="button" onClick={() => navigator.clipboard.writeText(`${location.origin}/games/${game}?room=${room.id}`)}><Copy size={15} /> Copiar link</button>
+                  <button type="button" onClick={() => navigator.clipboard.writeText(`${location.origin}${gamePath}?room=${room.id}`)}><Copy size={15} /> Copiar link</button>
                   <button type="button" onClick={() => void leaveRoom()} className="ghost">Sair</button>
                 </div>
               </div>
@@ -1157,7 +1170,7 @@ export function GameExperience({ game }: { game: GameId }) {
         </div>
       )}
       {isFutBR && mode === "bot" && (
-        <div className="futbr-start-row"><button type="button" className="game-primary-button" onClick={() => setFutScreen("match")}>Entrar em campo <ArrowRight size={16} /></button></div>
+        <div className="futbr-start-row"><button type="button" className="game-primary-button" onClick={() => { gameAudio.play("ui"); setFutScreen("match"); }}>Entrar em campo <ArrowRight size={16} /></button></div>
       )}
         </>
       )}
