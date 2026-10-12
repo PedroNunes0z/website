@@ -10,7 +10,7 @@ type Props = { params: Promise<{ game: string }> };
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const game = gameFromString((await params).game);
   if (!game) return {};
-  const title = game === "haxball" ? "Haxball" : "Hóquei";
+  const title = game === "haxball" ? "FutBR" : "Hóquei";
   return { title: `${title} | Games | Pedro Nunes`, description: `Jogue ${title} contra bots ou em salas públicas online.` };
 }
 

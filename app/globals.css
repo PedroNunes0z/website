@@ -433,6 +433,46 @@ img { max-width: 100%; }
 .game-room-lan button { min-height: 40px; padding: .65rem .8rem; display: flex; align-items: center; gap: .4rem; border: 1px solid var(--line); background: transparent; color: var(--orange); font-size: .67rem; text-transform: uppercase; cursor: pointer; }
 .game-room-lan button:hover:not(:disabled) { border-color: var(--orange); color: var(--white); }
 .game-room-lan button:disabled { opacity: .5; cursor: not-allowed; }
+.game-futbr { --game-accent: #ffd400; --game-green: #009c3b; --game-blue: #002776; --game-ink: #062b16; }
+.game-futbr .game-tag { border-color: rgba(255,212,0,.5); color: var(--game-accent); }
+.game-futbr .game-mode-switch button.active { background: var(--game-green); color: #fff; }
+.game-futbr .game-primary-button, .game-futbr .game-room-card > button { background: var(--game-accent); border-color: var(--game-accent); color: var(--game-ink); }
+.game-futbr .game-primary-button:hover:not(:disabled), .game-futbr .game-room-card > button:hover:not(:disabled) { background: #fff; border-color: #fff; }
+.game-futbr .game-overline, .game-futbr .game-roster strong, .game-futbr .game-room-code { color: var(--game-accent); }
+.game-futbr .game-board-hud strong { color: var(--game-accent); }
+.game-futbr .game-goal-overlay { border-color: var(--game-accent); box-shadow: 0 0 70px rgba(0,156,59,.4); }
+.game-futbr .game-goal-overlay span, .game-futbr .game-goal-overlay i { color: var(--game-accent); }
+.game-futbr .game-replay-badge { border-color: var(--game-accent); }
+.game-futbr .game-replay-badge strong { color: var(--game-accent); }
+.game-futbr .game-room-actions button, .game-futbr .game-board-footer button, .game-futbr .game-room-list-head button, .game-futbr .game-fullscreen-button { color: var(--game-accent); }
+.game-futbr .game-room-actions button:hover, .game-futbr .game-board-footer button:hover, .game-futbr .game-room-list-head button:hover { color: #fff; }
+.game-futbr .game-notes > div { color: var(--game-accent); }
+.futbr-flag { font-style: normal; margin-left: .6rem; font-size: .55em; vertical-align: middle; }
+.futbr-menu { margin-bottom: 1.4rem; padding: clamp(2rem, 5vw, 3.5rem) clamp(1.5rem, 4vw, 3rem); border: 1px solid rgba(255,212,0,.4); background: linear-gradient(135deg, #07130c 0%, #0b2e1a 45%, #07130c 70%, #0a1f4d 130%); text-align: center; }
+.futbr-flag-lg { font-size: clamp(2.5rem, 6vw, 4rem); }
+.futbr-menu .eyebrow { justify-content: center; color: var(--game-accent); }
+.futbr-logo { margin: .6rem 0; font-family: var(--display); font-size: clamp(2.6rem, 6vw, 4.5rem); font-weight: 500; line-height: 1; letter-spacing: -0.04em; color: var(--white); }
+.futbr-logo span { color: var(--game-accent); }
+.futbr-menu > p:last-of-type { max-width: 520px; margin: .5rem auto 0; color: var(--muted); font-size: .8rem; }
+.futbr-menu-buttons { margin-top: 1.8rem; display: flex; flex-direction: column; gap: .7rem; align-items: center; }
+.futbr-menu-buttons button { min-width: min(340px, 100%); min-height: 48px; padding: .8rem 1.2rem; display: inline-flex; align-items: center; justify-content: center; gap: .5rem; border: 1px solid var(--line); background: transparent; color: var(--white); font-size: .72rem; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; cursor: pointer; transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease; }
+.futbr-menu-buttons button:hover { border-color: var(--game-accent); color: var(--game-accent); }
+.futbr-menu-primary { background: var(--game-accent) !important; border-color: var(--game-accent) !important; color: var(--game-ink) !important; }
+.futbr-menu-primary:hover { background: #fff !important; border-color: #fff !important; color: #000 !important; }
+.futbr-settings { max-width: 480px; margin: 1.8rem auto 0; display: flex; flex-direction: column; gap: 1.1rem; text-align: left; }
+.futbr-settings label { display: flex; flex-direction: column; gap: .5rem; color: var(--muted); font-size: .65rem; text-transform: uppercase; letter-spacing: .08em; }
+.futbr-settings select, .futbr-settings input[type="text"], .futbr-settings input:not([type]) { padding: .7rem .85rem; border: 1px solid #4b413a; background: #0b0b0b; color: var(--white); font-size: .78rem; outline: none; }
+.futbr-settings select:focus, .futbr-settings input:focus { border-color: var(--game-accent); }
+.futbr-settings input[type="range"] { accent-color: var(--game-accent); }
+.futbr-range-row { display: flex; align-items: center; gap: .8rem; }
+.futbr-range-row input { flex: 1; }
+.futbr-range-row strong { color: var(--game-accent); font-variant-numeric: tabular-nums; }
+.futbr-settings > button { align-self: center; display: inline-flex; align-items: center; gap: .45rem; border: 0; background: none; color: var(--game-accent); font-size: .72rem; cursor: pointer; }
+.futbr-back-row { margin-bottom: 1rem; }
+.futbr-back-row button { display: inline-flex; align-items: center; gap: .45rem; border: 0; background: none; color: var(--muted); font-size: .7rem; text-transform: uppercase; letter-spacing: .1em; cursor: pointer; }
+.futbr-back-row button:hover { color: var(--game-accent); }
+.futbr-start-row { margin-bottom: 1.4rem; }
+.futbr-start-row .game-primary-button { width: 100%; min-height: 52px; font-size: .75rem; }
 .game-room-list-head button, .game-board-footer button, .game-room-actions button { display: inline-flex; align-items: center; gap: .45rem; border: 0; background: none; color: var(--orange); font-size: .7rem; cursor: pointer; }
 .game-room-list-head button:hover, .game-board-footer button:hover, .game-room-actions button:hover { color: var(--white); }
 .game-room-card { padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; border-bottom: 1px solid var(--line); }
@@ -479,6 +519,16 @@ img { max-width: 100%; }
 .game-replay-badge { position: absolute; top: .9rem; left: 50%; z-index: 4; padding: .55rem 1rem; border: 1px solid var(--orange); background: rgba(5, 5, 5, .88); color: var(--white); font-family: var(--mono); font-size: .6rem; text-transform: uppercase; letter-spacing: .14em; cursor: pointer; transform: translateX(-50%); }
 .game-replay-badge strong { color: var(--orange); }
 .game-replay-badge:hover { background: #251810; }
+.touch-controls { display: none; }
+@media (pointer: coarse) {
+  .touch-controls { position: absolute; inset: auto 0 0 0; z-index: 5; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 1rem calc(1rem + env(safe-area-inset-bottom, 0px)); pointer-events: none; }
+  .touch-pad { width: 128px; height: 128px; border-radius: 50%; border: 2px solid rgba(255,255,255,.35); background: rgba(5,5,5,.45); position: relative; pointer-events: auto; touch-action: none; }
+  .touch-stick { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%; background: rgba(255,141,79,.9); }
+  .touch-buttons { display: flex; gap: .6rem; align-items: flex-end; pointer-events: auto; }
+  .touch-btn { min-width: 68px; height: 68px; border-radius: 50%; border: 2px solid var(--orange); background: rgba(5,5,5,.6); color: var(--white); font-size: .58rem; font-weight: 800; letter-spacing: .06em; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .touch-btn:active { filter: brightness(1.4); }
+  .touch-kick { width: 88px; height: 88px; background: rgba(0,156,59,.8); border-color: #ffd400; }
+}
 .game-goal-overlay { position: absolute; top: 50%; left: 50%; z-index: 2; min-width: min(420px, 86%); padding: 1.5rem 2.5rem; display: flex; flex-direction: column; align-items: center; gap: .25rem; border: 1px solid var(--orange); background: rgba(8, 8, 8, .94); box-shadow: 0 0 70px rgba(255, 141, 79, .24); color: var(--white); text-align: center; transform: translate(-50%, -50%); pointer-events: none; animation: game-goal-appear 420ms ease-out both; }
 .game-goal-overlay span { color: var(--orange); font-family: var(--display); font-size: clamp(1.5rem, 4vw, 3rem); letter-spacing: .12em; }
 .game-goal-overlay strong { font-family: var(--display); font-size: clamp(2.4rem, 6vw, 5rem); line-height: 1; }

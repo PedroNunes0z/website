@@ -40,6 +40,8 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
 
   useEffect(() => {
     gameAudio.preload();
+    gameAudio.startMatch();
+    gameAudio.stopMenu();
     let destroyed = false;
     let phaserGame: { destroy: (removeCanvas: boolean) => void } | null = null;
 
@@ -283,6 +285,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
 
     return () => {
       destroyed = true;
+      gameAudio.stopMatch();
       phaserGame?.destroy(true);
       phaserGame = null;
     };

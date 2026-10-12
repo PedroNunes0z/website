@@ -28,7 +28,7 @@ O site foi construído com foco em identidade, performance e manutenção. A exp
 - Proteção centralizada de rotas administrativas
 - Limitação de tentativas de login e validação de origem nas mutações
 - Sitemap, robots, Open Graph e layout responsivo
-- Área `/games` com Haxball e hóquei jogáveis contra bots ou em salas públicas online
+- Área `/games` com FutBR e hóquei jogáveis contra bots ou em salas públicas online
 - Comentários por artigo com conta de leitor, respostas, Markdown restrito, imagens moderadas e nota de 1 a 5
 
 ## Stack
@@ -52,7 +52,7 @@ app/
   admin/                    painel e autenticação
   api/admin/                rotas protegidas de login, artigos e upload
   artigos/                  listagem e páginas editoriais
-  games/                    catálogo e partidas de Haxball e hóquei
+  games/                    catálogo e partidas de FutBR e hóquei
   api/games/                salas públicas e sincronização das partidas
   api/comments/             contas de leitores, comentários e moderação
   globals.css               sistema visual completo
@@ -109,14 +109,14 @@ A aplicação estará disponível em `http://localhost:3000`. O painel editorial
 
 ## Jogos
 
-Em `/games`, escolha Haxball ou hóquei. A física, os controles, as colisões e as regras dos HTML fornecidos foram integrados ao Canvas da aplicação com a identidade visual preta, laranja e branca. Os HTML de exemplo não são necessários em produção.
+Em `/games`, escolha FutBR ou hóquei. A física, os controles, as colisões e as regras dos HTML fornecidos foram integrados ao Canvas da aplicação com a identidade visual preta, laranja e branca. Os HTML de exemplo não são necessários em produção.
 
 | Jogo | Contra bot | Salas públicas |
 | --- | --- | --- |
-| Haxball | Você escolhe de 0 a 4 bots aliados e de 1 a 5 adversários. A partida termina em 5 gols. | Até 5 jogadores por equipe. |
+| FutBR | Você escolhe de 0 a 4 bots aliados e de 1 a 5 adversários. A partida termina em 5 gols. | Até 5 jogadores por equipe. |
 | Hóquei | Duelo 1v1 contra bot, até 7 gols. | Um jogador por equipe. |
 
-Use WASD ou as setas para mover. No Haxball, encoste na bola e clique com o botão esquerdo ou aperte Espaço para chutar; `Shift` corre e `Q` dá um dash curto na direção do cursor, consumindo estamina. A barra de estamina aparece só para o jogador local. O gol só conta com a bola inteira além da linha: entra o placar (GOOOL), depois o replay em velocidade real, que pode ser pulado com um clique. O campo cresce com os times (2x2 joga num mapa pequeno). Os bots têm papéis (perseguidor, apoio, defesa e goleiro) e miram sempre o gol adversário. Há sons de chute, parede, trave e torcida, com botão de mudo no rodapé. No hóquei (azul contra vermelho, disco preto), empurre o disco com o taco; o bot alterna entre ataque e defesa conforme o perigo. Ambos têm tela cheia e HUD com ping, SIM (física) e FPS (render).
+Use WASD ou as setas para mover (no celular, use o analógico na tela). No FutBR, encoste na bola e clique com o botão esquerdo ou aperte Espaço para chutar; `Shift` corre e `Q` dá um dash curto na direção do cursor, consumindo estamina. A barra de estamina aparece só para o jogador local. O gol só conta com a bola inteira além da linha: entra o placar (GOOOL), depois o replay em velocidade real, que pode ser pulado com um clique. O campo cresce com os times (2x2 joga num mapa pequeno). Os bots têm papéis (perseguidor, apoio, defesa e goleiro) e miram sempre o gol adversário. Há sons de chute, parede, trave e torcida, com botão de mudo no rodapé. No hóquei (azul contra vermelho, disco preto), empurre o disco com o taco; o bot alterna entre ataque e defesa conforme o perigo. Ambos têm tela cheia e HUD com ping, SIM (física) e FPS (render).
 
 Para jogar online, informe um nome, crie ou entre em uma sala pública e compartilhe o link ou o código exibido. Com ao menos um jogador em cada equipe, somente o criador da sala pode clicar em **Iniciar partida**; a sala não começa automaticamente. Não há contas nesta versão. A autorização do dono usa uma credencial exclusiva da sala, guardada na sessão do navegador. Uma aba que recarrega tenta retomar a participação; jogadores inativos são removidos, e salas sem atividade expiram. O criador hospeda a simulação no navegador; os demais enviam comandos e recebem snapshots por UDP (geckos.io no Render ou na LAN) ou por sondagem HTTP. Se o criador sair, a sala é encerrada. Para LAN, veja `game-server/README.md`. O modo contra bot funciona sem Redis; o modo online exige as variáveis REST abaixo.
 

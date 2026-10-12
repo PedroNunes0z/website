@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 };
 
 const games = [
-  { href: "/games/haxball", number: "01", title: "Haxball", subtitle: "Futebol de arena", detail: "Física de bola, chute carregado e equipes de até cinco jogadores.", icon: Goal },
+  { href: "/games/haxball", number: "01", title: "FutBR", subtitle: "Futebol brasileiro de arena", detail: "Verde e amarelo: drible, chute no clique e equipes de até cinco jogadores.", icon: Goal },
   { href: "/games/hoquei", number: "02", title: "Hóquei", subtitle: "Duelo sobre gelo", detail: "Disco veloz, colisões e partidas individuais de sete gols.", icon: Disc3 },
 ];
 

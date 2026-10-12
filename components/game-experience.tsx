@@ -9,12 +9,13 @@ import type { GameId, GameRoom, GameTeam } from "@/lib/games";
 import { gameAudio } from "@/lib/game-audio";
 import { usePhaserEngine } from "@/lib/game-server";
 import { GeckosRoomTransport, LAN_URL_KEY } from "@/lib/geckos-room";
+import { TouchControls, type TouchState } from "@/components/touch-controls";
 
 const PhaserGame = dynamic(() => import("@/components/phaser-game").then((module) => module.PhaserGame), { ssr: false });
 
-const labels = { haxball: "Haxball", hoquei: "Hóquei" };
+const labels = { haxball: "FutBR", hoquei: "Hóquei" };
 const descriptions = {
-  haxball: "Futebol de arena veloz com até cinco jogadores por equipe e chute no clique.",
+  haxball: "O futebol brasileiro de arena: drible, chute no clique e até cinco por equipe.",
   hoquei: "Hóquei de mesa em uma partida rápida de sete gols. Um jogador por equipe.",
 };
 
@@ -34,13 +35,14 @@ async function readResponse<T>(response: Response): Promise<T> {
   return result as T;
 }
 
-function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate }: {
+function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onRoomUpdate }: {
   game: GameId;
   mode: "bot" | "online";
   bots: BotCounts;
   room: GameRoom | null;
   playerId: string | null;
   ownerToken: string | null;
+  quality: "auto" | "high" | "low";
   onRoomUpdate: (room: GameRoom | null) => void;
 }) {
   const boardRef = useRef<HTMLDivElement>(null);
@@ -56,6 +58,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const geckosRef = useRef<GeckosRoomTransport | null>(null);
   const udpSnapTickRef = useRef(0);
   const keysRef = useRef<Set<string>>(new Set());
+  const touchRef = useRef<TouchState>({ x: 0, y: 0, active: false });
   const lastGoalCountRef = useRef(0);
   const hudScoreRef = useRef({ blue: 0, orange: 0 });
   const goalUntilRef = useRef(0);
@@ -90,6 +93,20 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const roomStatus = room?.status;
   const isHost = mode === "online" && room?.ownerId === playerId && !!ownerToken;
 
+  const prevStatusRef = useRef(roomStatus);
+  const prevWinnerRef = useRef<GameTeam | null>(null);
+  useEffect(() => {
+    // Apito de início quando a sala sai do lobby e apito final no vencedor.
+    if (mode === "online" && prevStatusRef.current !== "playing" && roomStatus === "playing") {
+      gameAudio.play("whistleStart", 1);
+    }
+    prevStatusRef.current = roomStatus;
+  }, [roomStatus, mode]);
+  useEffect(() => {
+    if (hud.winner && prevWinnerRef.current !== hud.winner) gameAudio.play("whistleEnd", 1);
+    prevWinnerRef.current = hud.winner;
+  }, [hud.winner]);
+
   useEffect(() => { roomRef.current = room; }, [room]);
 
   useEffect(() => {
@@ -108,6 +125,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     pendingGoalRef.current = null;
     bufferRef.current = [];
     replayRef.current = null;
+    if (mode === "bot") gameAudio.play("whistleStart", 1);
   }, [game, mode, bots, roomId, roomStatus]);
 
   useEffect(() => {
@@ -176,8 +194,11 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
   useEffect(() => {
     // Busca e decodifica os sons cedo (sem precisar de gesto); o contexto
-    // abre no primeiro clique ou tecla.
+    // abre no primeiro clique ou tecla. A partida assume a torcida e cala o
+    // tema do menu.
     gameAudio.preload();
+    gameAudio.startMatch();
+    gameAudio.stopMenu();
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d", { alpha: false, desynchronized: true });
     if (!canvas || !ctx) return;
@@ -192,7 +213,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     const resize = () => {
       const bounds = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 2) * qualityRef.current.scale;
+      const effective = quality === "high" ? 1 : quality === "low" ? 0.65 : qualityRef.current.scale;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2) * effective;
       canvas.width = Math.max(1, Math.round(bounds.width * dpr));
       canvas.height = Math.max(1, Math.round(bounds.height * dpr));
     };
@@ -218,31 +240,33 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         const draw = Math.round((renderMsAcc / Math.max(1, fpsFrames)) * 10) / 10;
         const simMs = Math.round((simMsAcc / Math.max(1, simSteps)) * 100) / 100;
         fpsRef.current = fps;
-        // Degradação automática: 3 janelas lentas reduzem o render para 65%
-        // (o CSS estica de volta); 6 janelas boas restauram 100%.
-        const quality = qualityRef.current;
-        if (fps < 40) {
-          quality.slow += 1;
-          quality.fast = 0;
-        } else if (fps > 55) {
-          quality.fast += 1;
-          quality.slow = 0;
-        } else {
-          quality.slow = 0;
-          quality.fast = 0;
-        }
-        if (quality.slow >= 3 && quality.scale > 0.65) {
-          quality.scale = 0.65;
-          quality.slow = 0;
-          quality.fast = 0;
-          resize();
-          console.info("[Perf] FPS baixo: render em 65% até recuperar.");
-        } else if (quality.fast >= 6 && quality.scale < 1) {
-          quality.scale = 1;
-          quality.slow = 0;
-          quality.fast = 0;
-          resize();
-          console.info("[Perf] FPS recuperado: render em 100%.");
+        // Degradação automática (só no modo auto): 3 janelas lentas reduzem
+        // o render para 65%; 6 janelas boas restauram 100%.
+        const auto = qualityRef.current;
+        if (quality === "auto") {
+          if (fps < 40) {
+            auto.slow += 1;
+            auto.fast = 0;
+          } else if (fps > 55) {
+            auto.fast += 1;
+            auto.slow = 0;
+          } else {
+            auto.slow = 0;
+            auto.fast = 0;
+          }
+          if (auto.slow >= 3 && auto.scale > 0.65) {
+            auto.scale = 0.65;
+            auto.slow = 0;
+            auto.fast = 0;
+            resize();
+            console.info("[Perf] FPS baixo: render em 65% até recuperar.");
+          } else if (auto.fast >= 6 && auto.scale < 1) {
+            auto.scale = 1;
+            auto.slow = 0;
+            auto.fast = 0;
+            resize();
+            console.info("[Perf] FPS recuperado: render em 100%.");
+          }
         }
         // Flush único a cada 500ms: evita re-render por medição de rede.
         setMetrics({ ping: pingRef.current, fps, sim, draw, simMs });
@@ -258,8 +282,11 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       }
 
       const keys = keysRef.current;
-      inputRef.current.x = Number(keys.has("KeyD") || keys.has("ArrowRight")) - Number(keys.has("KeyA") || keys.has("ArrowLeft"));
-      inputRef.current.y = Number(keys.has("KeyS") || keys.has("ArrowDown")) - Number(keys.has("KeyW") || keys.has("ArrowUp"));
+      const touch = touchRef.current;
+      const keysX = Number(keys.has("KeyD") || keys.has("ArrowRight")) - Number(keys.has("KeyA") || keys.has("ArrowLeft"));
+      const keysY = Number(keys.has("KeyS") || keys.has("ArrowDown")) - Number(keys.has("KeyW") || keys.has("ArrowUp"));
+      inputRef.current.x = touch.active ? touch.x : keysX;
+      inputRef.current.y = touch.active ? touch.y : keysY;
       inputRef.current.sprint = keys.has("ShiftLeft") || keys.has("ShiftRight");
 
       const currentRoom = roomRef.current;
@@ -318,7 +345,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       simSteps += steps;
 
       const localId = mode === "bot" ? "local" : (playerId ?? "");
-      const hideNames = qualityRef.current.scale < 1;
+      const hideNames = quality === "low" || qualityRef.current.scale < 1;
       const tRender0 = performance.now();
 
       // Anel do replay: guarda os últimos ~12s com carimbo de tempo da sim.
@@ -435,8 +462,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     };
 
     frame = requestAnimationFrame(run);
-    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
-  }, [game, mode, playerId, ownerToken, finishReplay]);
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); gameAudio.stopMatch(); };
+  }, [game, mode, playerId, ownerToken, quality, finishReplay]);
 
   const acceptTarget = useCallback((snapshot: GameSnapshot, hard = false) => {
     const current = targetRef.current;
@@ -728,6 +755,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         {replayBadge && <button type="button" className="game-replay-badge" onClick={() => finishReplay()}><strong>Replay</strong> · clique para pular</button>}
 
         <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? ", clique ou Espaço para chutar" : ""}`} onPointerDown={onPointerDown} onPointerMove={updateAim} onPointerEnter={updateAim} onContextMenu={(event) => event.preventDefault()} />
+        <TouchControls game={game} touchRef={touchRef} keysRef={keysRef} onKick={() => triggerKick()} onDash={() => { inputRef.current.dashSeq += 1; }} />
         {mode === "online" && room?.status === "waiting" && <div className="game-waiting">{isHost ? "Convide jogadores e clique em Iniciar partida." : "Aguardando o dono iniciar a partida."}</div>}
         {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong>{hud.flags[goalNotice.team]} {goalNotice.blue} <i>·</i> {goalNotice.orange}</strong><small>Equipe {teamName(game, goalNotice.team)}</small></div>}
         {hud.winner && !goalNotice && <div className="game-waiting">Equipe {teamName(game, hud.winner)} venceu.</div>}
@@ -773,6 +801,24 @@ export function GameExperience({ game }: { game: GameId }) {
       return false;
     }
   });
+  // Fluxo FutBR com cara de jogo: menu, ajustes, pré-partida e partida.
+  const isFutBR = game === "haxball";
+  const [futScreen, setFutScreen] = useState<"menu" | "setup" | "match" | "settings">("menu");
+  const [quality, setQuality] = useState<"auto" | "high" | "low">(() => {
+    if (typeof window === "undefined") return "auto";
+    try {
+      const saved = window.localStorage.getItem("pedro-games-quality");
+      return saved === "high" || saved === "low" ? saved : "auto";
+    } catch {
+      return "auto";
+    }
+  });
+  const [volume, setVolume] = useState(() => gameAudio.getVolume());
+
+  const startMenuMusic = () => {
+    gameAudio.ensure();
+    gameAudio.playMenu();
+  };
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("room")?.toUpperCase() ?? "";
@@ -780,6 +826,7 @@ export function GameExperience({ game }: { game: GameId }) {
     const timer = setTimeout(async () => {
       console.log(`[Game] Auto-joining room: ${requested}`);
       setMode("online");
+      if (game === "haxball") setFutScreen("setup");
       setRoomCode(requested);
       const saved = sessionStorage.getItem(`pedro-games:${game}:${requested}`);
       if (!saved) return;
@@ -885,6 +932,7 @@ export function GameExperience({ game }: { game: GameId }) {
     }
     window.history.replaceState({}, "", `/games/${game}`);
     setRoom(null); setPlayerId(null); setOwnerToken(null); void loadRooms();
+    if (game === "haxball") setFutScreen("setup");
   };
 
   const startRoom = async () => {
@@ -910,8 +958,17 @@ export function GameExperience({ game }: { game: GameId }) {
   }, [game]);
 
   const max = game === "haxball" ? 5 : 1;
+  // FutBR online: partida montada (dono iniciou ou convidado sincronizou)
+  // leva do pré-jogo ao campo sem estado extra.
+  const screen = isFutBR && futScreen === "setup" && mode === "online" && room?.status === "playing" ? "match" : futScreen;
+  const showSetup = !isFutBR || screen === "setup";
+  const showMatch = !isFutBR || screen === "match";
+  const exitMatch = () => {
+    if (mode === "online" && room) void leaveRoom();
+    else setFutScreen("setup");
+  };
   return (
-    <main className="game-experience shell">
+    <main className={isFutBR ? "game-experience game-futbr shell" : "game-experience shell"}>
       <div className="game-crumb">
         <Link href="/games"><ArrowLeft size={15} /> Todos os jogos</Link>
         <span>/</span>
@@ -921,17 +978,61 @@ export function GameExperience({ game }: { game: GameId }) {
       <div className="game-page-heading">
         <div>
           <p className="eyebrow"><span /> Playground / {game === "haxball" ? "01" : "02"}</p>
-          <h1>{labels[game]}<span>.</span></h1>
+          <h1>{labels[game]}<span>.</span>{isFutBR && <em className="futbr-flag" aria-label="Brasil">🇧🇷</em>}</h1>
           <p>{descriptions[game]}</p>
         </div>
       </div>
 
-      <div className="game-mode-switch" role="tablist" aria-label="Modo de jogo">
-        <button role="tab" aria-selected={mode === "bot"} className={mode === "bot" ? "active" : ""} onClick={() => { if (room) void leaveRoom(); setMode("bot"); setError(""); }}>Versus bot</button>
-        <button role="tab" aria-selected={mode === "online"} className={mode === "online" ? "active" : ""} onClick={() => { setMode("online"); setError(""); }}>Salas online</button>
-      </div>
+      {isFutBR && futScreen === "menu" && (
+        <div className="futbr-menu" onPointerDown={startMenuMusic}>
+          <span className="futbr-flag-lg" role="img" aria-label="Bandeira do Brasil">🇧🇷</span>
+          <p className="eyebrow"><span /> O futebol brasileiro de arena</p>
+          <h2 className="futbr-logo">FutBR<span>.</span></h2>
+          <p>Drible, chute no clique e até cinco por equipe. Escolha como entrar em campo.</p>
+          <div className="futbr-menu-buttons">
+            <button type="button" className="futbr-menu-primary" onClick={() => { setMode("bot"); setError(""); setFutScreen("setup"); }}>Jogar contra bots <ArrowRight size={16} /></button>
+            <button type="button" onClick={() => { setMode("online"); setError(""); setFutScreen("setup"); }}>Jogar online <ArrowRight size={16} /></button>
+            <button type="button" onClick={() => setFutScreen("settings")}>Configurações</button>
+          </div>
+        </div>
+      )}
+
+      {isFutBR && futScreen === "settings" && (
+        <div className="futbr-menu" onPointerDown={startMenuMusic}>
+          <p className="eyebrow"><span /> Ajustes</p>
+          <h2 className="futbr-logo">Opções<span>.</span></h2>
+          <div className="futbr-settings">
+            <label>Volume do jogo
+              <span className="futbr-range-row">
+                <input type="range" min={0} max={100} value={Math.round(volume * 100)} onChange={(event) => { const next = Number(event.target.value) / 100; gameAudio.setVolume(next); setVolume(next); }} aria-label="Volume do jogo" />
+                <strong>{Math.round(volume * 100)}%</strong>
+              </span>
+            </label>
+            <label>Qualidade do render
+              <select value={quality} onChange={(event) => { const next = event.target.value as "auto" | "high" | "low"; try { window.localStorage.setItem("pedro-games-quality", next); } catch { /* sem storage */ } setQuality(next); }}>
+                <option value="auto">Automática</option>
+                <option value="high">Alta</option>
+                <option value="low">Leve</option>
+              </select>
+            </label>
+            <label>Seu nome nas salas
+              <input value={name} maxLength={20} onChange={(event) => { setName(event.target.value); try { sessionStorage.setItem("pedro-games-name", event.target.value); } catch { /* sem storage */ } }} placeholder="Seu nome" />
+            </label>
+            <button type="button" onClick={() => setFutScreen("menu")}><ArrowLeft size={15} /> Voltar ao menu</button>
+          </div>
+        </div>
+      )}
+
+      {showSetup && (
+        <>
+          <div className="game-mode-switch" role="tablist" aria-label="Modo de jogo">
+            <button role="tab" aria-selected={mode === "bot"} className={mode === "bot" ? "active" : ""} onClick={() => { if (room) void leaveRoom(); setMode("bot"); setError(""); }}>Versus bot</button>
+            <button role="tab" aria-selected={mode === "online"} className={mode === "online" ? "active" : ""} onClick={() => { setMode("online"); setError(""); }}>Salas online</button>
+          </div>
+          {isFutBR && <div className="futbr-back-row"><button type="button" onClick={() => { if (room) void leaveRoom(); setFutScreen("menu"); }}><ArrowLeft size={15} /> Menu</button></div>}
 
       {mode === "bot" ? (
+
         <div className="game-setup">
           <div>
             <span className="game-overline">Partida local</span>
@@ -1055,8 +1156,16 @@ export function GameExperience({ game }: { game: GameId }) {
           {error && <p role="alert" className="game-error">{error}</p>}
         </div>
       )}
+      {isFutBR && mode === "bot" && (
+        <div className="futbr-start-row"><button type="button" className="game-primary-button" onClick={() => setFutScreen("match")}>Entrar em campo <ArrowRight size={16} /></button></div>
+      )}
+        </>
+      )}
 
-      {(mode === "bot" || room) && (mode === "bot" && phaser
+      {showMatch && (mode === "bot" || room) && (
+        <>
+          {isFutBR && <div className="futbr-back-row"><button type="button" onClick={exitMatch}><ArrowLeft size={15} /> Sair da partida</button></div>}
+          {mode === "bot" && phaser
         ? <PhaserGame key={`phaser-${game}-${bots.blue}-${bots.orange}`} game={game} bots={bots} />
         : <GameCanvas
           key={`${game}-${mode}-${bots.blue}-${bots.orange}-${room?.id ?? "local"}`}
@@ -1066,8 +1175,11 @@ export function GameExperience({ game }: { game: GameId }) {
           room={room}
           playerId={playerId}
           ownerToken={ownerToken}
+          quality={quality}
           onRoomUpdate={onRoomUpdate}
         />
+          }
+        </>
       )}
 
       <div className="game-notes">
