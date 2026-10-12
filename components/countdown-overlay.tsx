@@ -27,6 +27,7 @@ export function useCountdown() {
   const start = useCallback(() => {
     cancel();
     frozenRef.current = true;
+    console.info("[Game] Contagem 1-2-3-JÁ iniciada.");
     const steps: Array<[CountValue, number, boolean]> = [
       [1, 350, false],
       [2, 1100, false],

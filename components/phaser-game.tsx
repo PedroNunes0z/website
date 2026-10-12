@@ -86,6 +86,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
         gameAudio.play("kick", 0.7, game);
       };
       let prevDash = false;
+      let pausedGame = false;
       const camPos = { x: WORLD_W / 2, y: WORLD_H / 2 };
 
       class ArenaScene extends Phaser.Scene {
@@ -129,6 +130,17 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             gameAudio.ensure();
             triggerKick();
           });
+          const pauseText = this.add.text(WORLD_W / 2, 90, "PAUSADO (P)", {
+            fontSize: "22px",
+            fontFamily: "monospace",
+            color: "#ffffff",
+            backgroundColor: "rgba(0,0,0,0.65)",
+            padding: { x: 12, y: 8 },
+          }).setOrigin(0.5).setVisible(false);
+          kb?.on("keydown-P", () => {
+            pausedGame = !pausedGame;
+            pauseText.setVisible(pausedGame);
+          });
         }
 
         private fieldX(worldX: number): number {          return Phaser.Math.Clamp(worldX - WORLD_W / 2, -1000, 1000);
@@ -146,7 +158,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             input.y = Number(k.S.isDown || k.DOWN.isDown) - Number(k.W.isDown || k.UP.isDown);
             input.sprint = !!k.SHIFT?.isDown;
           }
-          if (!countdownFrozen.current) {
+          if (!countdownFrozen.current && !pausedGame) {
             stepGame(state, { local: input }, lastKicks, dt);
             const me = state.players.find((p) => p.id === "local");
             const dashing = isHaxball && !!me && me.dashRemaining > 0;
@@ -156,7 +168,8 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           // Câmera dinâmica: segue o jogador com zoom, sem mostrar o vazio.
           const fw = state.field.w;
           const fh = state.field.h;
-          const zoom = Math.min(1.81, fw / 640, fh / 420);
+          const fitZoom = Math.max(1, Math.min(1160 / fw, 760 / fh) * 0.85);
+          const zoom = fitZoom * 1.35;
           const cam = this.cameras.main;
           cam.setZoom(zoom);
           const hero = state.players.find((p) => p.id === "local");

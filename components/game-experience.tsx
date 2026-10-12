@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, Copy, Maximize2, Minimize2, RefreshCcw, Users, Volume2, VolumeX } from "lucide-react";
+import { ArrowLeft, ArrowRight, Copy, Maximize2, Minimize2, Pause, Play, RefreshCcw, Users, Volume2, VolumeX } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -75,6 +75,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   const postSfxAtRef = useRef(0);
   const prevDashRef = useRef(false);
   const matchPointRef = useRef(false);
+  const pausedRef = useRef(false);
   const droppedRef = useRef(0);
   // Degradação automática de qualidade quando o render não acompanha.
   const qualityRef = useRef({ scale: 1, slow: 0, fast: 0 });
@@ -87,6 +88,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   const [udpLive, setUdpLive] = useState(false);
   const [replayBadge, setReplayBadge] = useState(false);
   const [muted, setMuted] = useState(() => gameAudio.isMuted());
+  const [paused, setPaused] = useState(false);
   const pingRef = useRef(0);
   const fpsRef = useRef(60);
   const netStatsRef = useRef({ snapshots: 0, inputSends: 0, snapshotSends: 0, driftMs: 0, lastDiag: 0 });
@@ -199,17 +201,26 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     inputRef.current.kickSeq += 1;
   }, [finishReplay, mode, playerId]);
 
+  // Pausa só no modo bot (no online a simulação é compartilhada).
+  const togglePause = useCallback(() => {
+    if (mode !== "bot") return;
+    const next = !pausedRef.current;
+    pausedRef.current = next;
+    setPaused(next);
+  }, [mode]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const onDown = (event: KeyboardEvent) => {
-      if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyF", "KeyQ", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"].includes(event.code)) {
+      if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyF", "KeyQ", "KeyP", "Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"].includes(event.code)) {
         gameAudio.ensure();
         if (document.activeElement === canvas) event.preventDefault();
         const typing = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement;
         const onCanvas = document.activeElement === canvas;
         if (game === "haxball" && event.code === "KeyQ" && !event.repeat && !typing) inputRef.current.dashSeq += 1;
         if (game === "haxball" && event.code === "Space" && !typing && onCanvas) triggerKick();
+        if (event.code === "KeyP" && !typing && onCanvas) togglePause();
         keysRef.current.add(event.code);
       }
     };
@@ -223,7 +234,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
       window.removeEventListener("keyup", onUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [game, triggerKick]);
+  }, [game, triggerKick, togglePause]);
 
   useEffect(() => {
     // Busca e decodifica os sons cedo (sem precisar de gesto); o contexto
@@ -357,6 +368,40 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         },
       };
 
+      const localId = mode === "bot" ? "local" : (playerId ?? "");
+      const hideNames = quality === "low" || qualityRef.current.scale < 1;
+
+      // Câmera: enche a tela com o campo (mapa pequeno cresce) e segue o
+      // jogador com antecipação, sem mostrar o vazio fora do campo.
+      const st = stateRef.current;
+      const fw = st.field.w;
+      const fh = st.field.h;
+      const fitZoom = Math.max(1, Math.min(1160 / fw, 760 / fh) * 0.85);
+      const zoom = fitZoom * 1.35;
+      const meCam = st.players.find((actor) => actor.id === localId) ?? null;
+      const look = 1 - Math.exp(-dt * 4.5);
+      camRef.current.x += ((meCam ? meCam.x + meCam.vx * 0.25 : 0) - camRef.current.x) * look;
+      camRef.current.y += ((meCam ? meCam.y + meCam.vy * 0.25 : 0) - camRef.current.y) * look;
+      const viewW = 1160 / zoom;
+      const viewH = 760 / zoom;
+      const margin = 60;
+      const loX = -fw / 2 - margin + viewW / 2;
+      const hiX = fw / 2 + margin - viewW / 2;
+      const loY = -fh / 2 - margin + viewH / 2;
+      const hiY = fh / 2 + margin - viewH / 2;
+      const cam = {
+        x: loX > hiX ? 0 : Math.max(loX, Math.min(hiX, camRef.current.x)),
+        y: loY > hiY ? 0 : Math.max(loY, Math.min(hiY, camRef.current.y)),
+        zoom,
+      };
+
+      // Pausado: congela tudo e só desenha o quadro parado.
+      if (pausedRef.current) {
+        drawGame(ctx, stateRef.current, localId, { hideNames, cam });
+        frame = requestAnimationFrame(run);
+        return;
+      }
+
       acc = Math.min(acc + dt, 0.25);
       let steps = 0;
       const tSim0 = performance.now();
@@ -389,31 +434,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         acc = 0;
       }
 
-      const localId = mode === "bot" ? "local" : (playerId ?? "");
-      const hideNames = quality === "low" || qualityRef.current.scale < 1;
       const tRender0 = performance.now();
-
-      // Câmera: mira o jogador com antecipação da velocidade e suaviza.
-      const st = stateRef.current;
-      const fw = st.field.w;
-      const fh = st.field.h;
-      const zoom = Math.min(1.81, fw / 640, fh / 420);
-      const meCam = st.players.find((actor) => actor.id === localId) ?? null;
-      const look = 1 - Math.exp(-dt * 4.5);
-      camRef.current.x += ((meCam ? meCam.x + meCam.vx * 0.25 : 0) - camRef.current.x) * look;
-      camRef.current.y += ((meCam ? meCam.y + meCam.vy * 0.25 : 0) - camRef.current.y) * look;
-      const viewW = 1160 / zoom;
-      const viewH = 760 / zoom;
-      const margin = 60;
-      const loX = -fw / 2 - margin + viewW / 2;
-      const hiX = fw / 2 + margin - viewW / 2;
-      const loY = -fh / 2 - margin + viewH / 2;
-      const hiY = fh / 2 + margin - viewH / 2;
-      const cam = {
-        x: loX > hiX ? 0 : Math.max(loX, Math.min(hiX, camRef.current.x)),
-        y: loY > hiY ? 0 : Math.max(loY, Math.min(hiY, camRef.current.y)),
-        zoom,
-      };
 
       // Anel do replay: guarda os últimos ~12s com carimbo de tempo da sim.
       // O carimbo garante 1x na reprodução em qualquer taxa de quadros.
@@ -830,6 +851,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         </div>
         {replayBadge && <button type="button" className="game-replay-badge" onClick={() => finishReplay()}><strong>Replay</strong> · clique para pular</button>}
         <CountdownOverlay value={countValue} />
+        {paused && <div className="game-waiting">Pausado. Aperte P para continuar.</div>}
 
         <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? ", clique ou Espaço para chutar" : ""}`} onPointerDown={onPointerDown} onContextMenu={(event) => event.preventDefault()} />
         <TouchControls game={game} touchRef={touchRef} keysRef={keysRef} onKick={() => triggerKick()} onDash={() => { inputRef.current.dashSeq += 1; }} />
@@ -839,8 +861,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
       </div>
 
       <div className="game-board-footer">
-        <span>WASD ou setas: mover {game === "haxball" ? " · Clique ou Espaço: chute · Shift: correr · Q: dash na direção do movimento" : " · Empurre o disco para marcar gols"}</span>
+        <span>WASD ou setas: mover {game === "haxball" ? " · Clique ou Espaço: chute · Shift: correr · Q: dash na direção do movimento" : " · Empurre o disco para marcar gols"}{mode === "bot" ? " · P: pausar" : ""}</span>
         <span className="game-board-footer-right">
+          {mode === "bot" && <button type="button" onClick={togglePause} aria-label={paused ? "Continuar" : "Pausar"} title={paused ? "Continuar (P)" : "Pausar (P)"}>{paused ? <Play size={15} /> : <Pause size={15} />} {paused ? "Continuar" : "Pausar"}</button>}
           <button type="button" onClick={() => { const next = !muted; gameAudio.setMuted(next); setMuted(next); if (!next) gameAudio.ensure(); }} aria-label={muted ? "Ativar som" : "Silenciar"} title={muted ? "Ativar som" : "Silenciar"}>{muted ? <VolumeX size={15} /> : <Volume2 size={15} />} {muted ? "Mudo" : "Som"}</button>
         </span>
         {networkError && <p className="game-error" role="status">{networkError}</p>}
