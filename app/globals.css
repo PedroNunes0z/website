@@ -544,6 +544,7 @@ img { max-width: 100%; }
 .game-goal-overlay strong { font-family: var(--display); font-size: clamp(2.4rem, 6vw, 5rem); line-height: 1; }
 .game-goal-overlay i { color: var(--orange); font-style: normal; }
 .game-goal-overlay small { color: var(--muted); font-size: .7rem; text-transform: uppercase; letter-spacing: .12em; }
+.goal-flag { height: 1.4em; border-radius: 2px; vertical-align: -0.25em; }
 @keyframes game-goal-appear { from { opacity: 0; scale: .92; } to { opacity: 1; scale: 1; } }
 .game-board-wrap:fullscreen { width: 100vw; height: 100dvh; display: flex; flex-direction: column; border: 0; background: #090909; }
 .game-board-wrap:fullscreen .game-canvas-shell { flex: 1; min-height: 0; }

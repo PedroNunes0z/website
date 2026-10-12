@@ -1,10 +1,11 @@
 "use client";
 
 import { ArrowLeft, ArrowRight, Copy, Maximize2, Minimize2, RefreshCcw, Users, Volume2, VolumeX } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { applyGoal, createBotGame, createOnlineGame, drawGame, goalMouth, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameActor, type GameInput, type GameObject, type GameSnapshot } from "@/lib/game-engine";
+import { applyGoal, createBotGame, createOnlineGame, drawGame, goalMouth, pickTeamFlags, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameActor, type GameInput, type GameObject, type GameSnapshot } from "@/lib/game-engine";
 import type { GameId, GameRoom, GameTeam } from "@/lib/games";
 import { gameAudio } from "@/lib/game-audio";
 import { usePhaserEngine } from "@/lib/game-server";
@@ -78,7 +79,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   // Degradação automática de qualidade quando o render não acompanha.
   const qualityRef = useRef({ scale: 1, slow: 0, fast: 0 });
 
-  const [hud, setHud] = useState({ blue: 0, orange: 0, elapsed: 0, winner: null as GameTeam | null });
+  const [hud, setHud] = useState({ blue: 0, orange: 0, elapsed: 0, winner: null as GameTeam | null, flags: pickTeamFlags() });
   const [goalNotice, setGoalNotice] = useState<{ team: GameTeam; blue: number; orange: number; id: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [networkError, setNetworkError] = useState("");
@@ -164,7 +165,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   // vazio fora do campo.
   const camRef = useRef({ x: 0, y: 0 });
 
-  // Encerra o replay e volta ao jogo (placar já aplicado antes do replay).
+  // Encerra o replay e volta ao jogo com contagem (placar já aplicado).
+  // Sem vencedor: 1, 2, 3 e JÁ antes de soltar a bola de novo.
   const finishReplay = useCallback(() => {
     if (phaseRef.current !== "replay") return;
     replayRef.current = null;
@@ -172,7 +174,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     setReplayBadge(false);
     bufferRef.current = [];
     phaseRef.current = "play";
-  }, []);
+    if (!stateRef.current.winner) startCountdown();
+  }, [startCountdown]);
 
   // Chute sem mira: encostou na bola (38px) + clique/Espaço = chute de
   // potência fixa na direção em que a bola está, com leve antecipação.
@@ -229,6 +232,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     gameAudio.preload();
     gameAudio.startMatch();
     gameAudio.stopMenu();
+    if (mode === "bot") startCountdown();
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d", { alpha: false, desynchronized: true });
     if (!canvas || !ctx) return;
@@ -518,7 +522,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
 
       if (now - hudTime > 180) {
         const state = stateRef.current;
-        setHud({ blue: state.score.blue, orange: state.score.orange, elapsed: state.elapsed, winner: state.winner });
+        setHud({ blue: state.score.blue, orange: state.score.orange, elapsed: state.elapsed, winner: state.winner, flags: state.flags });
         // Match-point empatado: batidas em loop até sair o gol do título.
         const target = state.game === "haxball" ? 5 : 7;
         const matchPoint = !state.winner && state.score.blue === state.score.orange && state.score.blue === target - 1;
@@ -537,7 +541,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
 
     frame = requestAnimationFrame(run);
     return () => { cancelAnimationFrame(frame); observer.disconnect(); gameAudio.stopMatch(); gameAudio.stopStomps(); };
-  }, [game, mode, playerId, ownerToken, quality, finishReplay, countdownFrozen]);
+  }, [game, mode, playerId, ownerToken, quality, finishReplay, countdownFrozen, startCountdown]);
 
   const acceptTarget = useCallback((snapshot: GameSnapshot, hard = false) => {
     const current = targetRef.current;
@@ -830,7 +834,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? ", clique ou Espaço para chutar" : ""}`} onPointerDown={onPointerDown} onContextMenu={(event) => event.preventDefault()} />
         <TouchControls game={game} touchRef={touchRef} keysRef={keysRef} onKick={() => triggerKick()} onDash={() => { inputRef.current.dashSeq += 1; }} />
         {mode === "online" && room?.status === "waiting" && <div className="game-waiting">{isHost ? "Convide jogadores e clique em Iniciar partida." : "Aguardando o dono iniciar a partida."}</div>}
-        {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong><span className={`score-dot ${goalNotice.team === "blue" ? homeDot : awayDot}`} /> {goalNotice.blue} <i>·</i> {goalNotice.orange}</strong><small>Equipe {teamName(game, goalNotice.team)}</small></div>}
+        {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong><Image src={`/games/flags/4x3/${hud.flags[goalNotice.team]}.svg`} alt="" width={28} height={21} className="goal-flag" /> {goalNotice.blue} <i>·</i> {goalNotice.orange}</strong><small>Equipe {teamName(game, goalNotice.team)}</small></div>}
         {hud.winner && !goalNotice && <div className="game-waiting">Equipe {teamName(game, hud.winner)} venceu.</div>}
       </div>
 

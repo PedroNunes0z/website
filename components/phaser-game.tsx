@@ -91,18 +91,22 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
       class ArenaScene extends Phaser.Scene {
         private gfx!: Phaser.GameObjects.Graphics;
         private keys!: Record<string, Phaser.Input.Keyboard.Key>;
-        private starTexts: Phaser.GameObjects.Text[] = [];
+        private flagImgs = new Map<string, Phaser.GameObjects.Image>();
 
         create() {
           this.gfx = this.add.graphics();
-          for (let i = 0; i < state.players.length; i++) {
-            const text = this.add.text(0, 0, "★", {
-              fontSize: isHaxball ? "13px" : "19px",
-              fontFamily: "monospace",
-              color: isHaxball ? "#ffd166" : "#ffffff",
-            }).setOrigin(0.5);
-            this.starTexts.push(text);
-          }
+          const flagUrl = (team: string) => `/games/flags/4x3/${state.flags[team as "blue" | "orange"]}.svg`;
+          this.load.image("flag-blue", flagUrl("blue"));
+          this.load.image("flag-orange", flagUrl("orange"));
+          this.load.once(Phaser.Loader.Events.COMPLETE, () => {
+            for (const p of state.players) {
+              const img = this.add.image(0, 0, p.team === "blue" ? "flag-blue" : "flag-orange");
+              const r = state.game === "haxball" ? 16 : 24;
+              img.setDisplaySize(r * 1.25, r * 1.25 * 0.75);
+              this.flagImgs.set(p.id, img);
+            }
+          });
+          this.load.start();
           const kb = this.input.keyboard;
           if (kb) {
             this.keys = kb.addKeys(
@@ -194,7 +198,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
               g.fillStyle(0xffffff, Math.min(0.65, (p.flash / 0.18) * 0.65));
               g.fillCircle(px, py, r);
             }
-            this.starTexts[i]?.setPosition(px, py + 1);
+            this.flagImgs.get(p.id)?.setPosition(px, py + 1);
           }
           // Bola / disco sem contorno.
           const bx = s.ball.x + WORLD_W / 2;

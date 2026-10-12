@@ -286,6 +286,22 @@ test("bola que sai de volta antes da espera não vale gol", () => {
   assert.equal(state.goalPending, null);
 });
 
+test("encostar devagar quase não desloca a bola", () => {
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
+  const player = state.players[0];
+  player.x = 0;
+  player.y = 0;
+  player.vx = 0;
+  player.vy = 0;
+  state.ball.x = -40;
+  state.ball.y = 0;
+  state.ball.vx = 50;
+  state.ball.vy = 0;
+  for (let frame = 0; frame < 60; frame++) stepGame(state, {}, {}, 1 / 60);
+  assert.ok(Math.hypot(state.ball.vx, state.ball.vy) < 45, `bola a ${Math.hypot(state.ball.vx, state.ball.vy)}`);
+  assert.ok(state.ball.x < 20, `bola em ${state.ball.x}`);
+});
+
 test("bola rápida empurra o jogador para trás", () => {
   const state = createOnlineGame("haxball", roster, FULL_FIELD);
   const player = state.players[0];
@@ -300,6 +316,15 @@ test("bola rápida empurra o jogador para trás", () => {
   for (let frame = 0; frame < 8; frame++) stepGame(state, {}, {}, 1 / 60);
   assert.ok(player.x > 0.5, `jogador em ${player.x}`);
   assert.ok(player.vx > 20, `vx em ${player.vx}`);
+});
+
+test("cada time ganha uma bandeira distinta na partida", () => {
+  for (let i = 0; i < 5; i++) {
+    const state = createBotGame("haxball", { blue: 1, orange: 1 }, FULL_FIELD);
+    assert.ok(/^[a-z-]+$/.test(state.flags.blue));
+    assert.ok(/^[a-z-]+$/.test(state.flags.orange));
+    assert.notEqual(state.flags.blue, state.flags.orange);
+  }
 });
 
 test("chute acende o clarão no jogador e na bola, que apaga sozinho", () => {
