@@ -390,7 +390,8 @@ function steer(player: GameActor, input: GameInput, dt: number, game: GameId, hw
       if (player.stamina === 0) player.sprintLock = true;
     } else {
       player.sprintRest += dt;
-      if (player.sprintRest > 0.5) player.stamina = Math.min(100, player.stamina + 20 * dt);
+      // Recarga lenta: 12/s após 0,5s parado (barra cheia em ~8s).
+      if (player.sprintRest > 0.5) player.stamina = Math.min(100, player.stamina + 12 * dt);
       if (player.stamina >= 25) player.sprintLock = false;
     }
     if (input.charging) {
