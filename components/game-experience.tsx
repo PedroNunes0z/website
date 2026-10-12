@@ -371,20 +371,20 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
       const localId = mode === "bot" ? "local" : (playerId ?? "");
       const hideNames = quality === "low" || qualityRef.current.scale < 1;
 
-      // Câmera: enche a tela com o campo (mapa pequeno cresce) e segue o
+      // Câmera: enche a tela com o campo (mapa pequeno cresce) e persegue o
       // jogador com antecipação, sem mostrar o vazio fora do campo.
       const st = stateRef.current;
       const fw = st.field.w;
       const fh = st.field.h;
       const fitZoom = Math.max(1, Math.min(1160 / fw, 760 / fh) * 0.85);
-      const zoom = fitZoom * 1.35;
+      const zoom = fitZoom * 1.5;
       const meCam = st.players.find((actor) => actor.id === localId) ?? null;
-      const look = 1 - Math.exp(-dt * 4.5);
-      camRef.current.x += ((meCam ? meCam.x + meCam.vx * 0.25 : 0) - camRef.current.x) * look;
-      camRef.current.y += ((meCam ? meCam.y + meCam.vy * 0.25 : 0) - camRef.current.y) * look;
+      const look = 1 - Math.exp(-dt * 6);
+      camRef.current.x += ((meCam ? meCam.x + meCam.vx * 0.35 : 0) - camRef.current.x) * look;
+      camRef.current.y += ((meCam ? meCam.y + meCam.vy * 0.35 : 0) - camRef.current.y) * look;
       const viewW = 1160 / zoom;
       const viewH = 760 / zoom;
-      const margin = 60;
+      const margin = 90;
       const loX = -fw / 2 - margin + viewW / 2;
       const hiX = fw / 2 + margin - viewW / 2;
       const loY = -fh / 2 - margin + viewH / 2;

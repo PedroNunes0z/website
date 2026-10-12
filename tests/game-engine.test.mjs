@@ -246,6 +246,7 @@ test("haxball anda com teto de 95 (movimentação mais lenta)", () => {
 
 test("campo 2x2 é menor e o gol acompanha a boca da rede", () => {
   const small = createOnlineGame("haxball", roster);
+  assert.equal(small.field.w, 560);
   assert.ok(small.field.w < 1000, `campo com ${small.field.w}`);
   const hw = small.field.w / 2;
   small.ball.x = hw + 6;

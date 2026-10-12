@@ -88,6 +88,22 @@ export function pickTeamFlags(): Record<GameTeam, string> {
   return { blue: TEAM_FLAG_POOL[a], orange: TEAM_FLAG_POOL[b] };
 }
 
+// Fundo claro do jogador a partir da cor principal da bandeira.
+const FLAG_BG: Record<string, string> = {
+  br: "#a9e6b8", de: "#ffe08a", fr: "#bcd6ff", ar: "#bfe6ff",
+  es: "#ffb3ab", it: "#b5e6c3", pt: "#b7e4c5", nl: "#ffd2a8",
+  uy: "#bfe0ff", co: "#ffe49a", mx: "#a9e3bb", us: "#c3d4ef",
+  jp: "#ffd9de", kr: "#cfe0ff", sn: "#b9e6b9", ma: "#ffb3b3",
+  hr: "#ffb8b8", be: "#ffe08a", ch: "#ff9d9d", se: "#b8d9ff",
+  gb: "#c9d6ea", ca: "#ffb0a8", no: "#ff9f9f", dk: "#ff9d9d",
+};
+
+/** Tom claro da bandeira para o fundo do jogador, ou nulo se desconhecida. */
+export function flagBackground(key: string | undefined): string | null {
+  if (!key) return null;
+  return FLAG_BG[key] ?? null;
+}
+
 const FIELD_WIDTH = 1000;
 const FIELD_HEIGHT = 560;
 const VIEW_HEIGHT = 760;
@@ -103,12 +119,13 @@ const emptyInput: GameInput = { x: 0, y: 0, sprint: false, kickSeq: 0, dashSeq: 
 export interface FieldSize { w: number; h: number }
 export const FULL_FIELD: FieldSize = { w: FIELD_WIDTH, h: FIELD_HEIGHT };
 
-/** Campo proporcional ao tamanho dos times: 2x2 joga num mapa pequeno. */
+/** Campo proporcional ao tamanho dos times: quanto menos gente, menor o mapa. */
 export function fieldFor(game: GameId, totalPlayers: number): FieldSize {
   if (game === "hoquei") return { ...FULL_FIELD };
-  if (totalPlayers <= 2) return { w: 680, h: 390 };
-  if (totalPlayers <= 4) return { w: 760, h: 430 };
-  if (totalPlayers <= 6) return { w: 880, h: 495 };
+  if (totalPlayers <= 2) return { w: 560, h: 320 };
+  if (totalPlayers <= 4) return { w: 640, h: 360 };
+  if (totalPlayers <= 6) return { w: 800, h: 450 };
+  if (totalPlayers <= 8) return { w: 920, h: 520 };
   return { ...FULL_FIELD };
 }
 
@@ -1348,7 +1365,8 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
   for (const player of state.players) {
     const radius = onIce ? 24 : 16;
     ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2);
-    ctx.fillStyle = player.team === "blue" ? homeFill : awayFill; ctx.fill();
+    ctx.fillStyle = flagBackground(state.flags?.[player.team]) ?? (player.team === "blue" ? homeFill : awayFill);
+    ctx.fill();
     if (player.flash > 0) {
       ctx.fillStyle = `rgba(255,255,255,${Math.min(0.65, (player.flash / 0.18) * 0.65)})`;
       ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2); ctx.fill();

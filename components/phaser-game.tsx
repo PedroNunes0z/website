@@ -5,6 +5,7 @@ import { gameAudio } from "@/lib/game-audio";
 import { CountdownOverlay, useCountdown } from "@/components/countdown-overlay";
 import {
   createBotGame,
+  flagBackground,
   FULL_FIELD,
   stepGame,
   type BotCounts,
@@ -169,16 +170,16 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           const fw = state.field.w;
           const fh = state.field.h;
           const fitZoom = Math.max(1, Math.min(1160 / fw, 760 / fh) * 0.85);
-          const zoom = fitZoom * 1.35;
+          const zoom = fitZoom * 1.5;
           const cam = this.cameras.main;
           cam.setZoom(zoom);
           const hero = state.players.find((p) => p.id === "local");
-          const look = 1 - Math.exp(-dt * 4.5);
-          camPos.x += (((hero ? hero.x + hero.vx * 0.25 : 0) + WORLD_W / 2) - camPos.x) * look;
-          camPos.y += (((hero ? hero.y + hero.vy * 0.25 : 0) + WORLD_H / 2) - camPos.y) * look;
+          const look = 1 - Math.exp(-dt * 6);
+          camPos.x += (((hero ? hero.x + hero.vx * 0.35 : 0) + WORLD_W / 2) - camPos.x) * look;
+          camPos.y += (((hero ? hero.y + hero.vy * 0.35 : 0) + WORLD_H / 2) - camPos.y) * look;
           const viewW = WORLD_W / zoom;
           const viewH = WORLD_H / zoom;
-          const margin = 60;
+          const margin = 90;
           const loX = WORLD_W / 2 - fw / 2 - margin + viewW / 2;
           const hiX = WORLD_W / 2 + fw / 2 + margin - viewW / 2;
           const loY = WORLD_H / 2 - fh / 2 - margin + viewH / 2;
@@ -204,7 +205,10 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             const r = s.game === "haxball" ? 16 : 24;
             const px = p.x + WORLD_W / 2;
             const py = p.y + WORLD_H / 2;
-            const fill = p.team === "blue" ? (isHaxball ? 0xfffdf9 : 0x2456e6) : (isHaxball ? 0xff8d4f : 0xd7263d);
+            const bg = flagBackground(state.flags[p.team]);
+            const fill = bg !== null
+              ? Number.parseInt(bg.slice(1), 16)
+              : (p.team === "blue" ? (isHaxball ? 0xfffdf9 : 0x2456e6) : (isHaxball ? 0xff8d4f : 0xd7263d));
             g.fillStyle(fill, 1);
             g.fillCircle(px, py, r);
             if (p.flash > 0) {
