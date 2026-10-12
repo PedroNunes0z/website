@@ -60,7 +60,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
         if (!me || me.cooldown > 0) return;
         const dx = state.ball.x - me.x;
         const dy = state.ball.y - me.y;
-        if (dx * dx + dy * dy > 41 * 41) return;
+        if (dx * dx + dy * dy > 40 * 40) return;
         input.aimX = state.ball.x + state.ball.vx * 0.1;
         input.aimY = state.ball.y + state.ball.vy * 0.1;
         input.power = 0.62;

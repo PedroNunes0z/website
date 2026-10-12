@@ -139,7 +139,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     if (!me || me.cooldown > 0) return;
     const dx = snapshot.ball.x - me.x;
     const dy = snapshot.ball.y - me.y;
-    if (dx * dx + dy * dy > 38 * 38) return;
+    if (dx * dx + dy * dy > 40 * 40) return;
     inputRef.current.aimX = snapshot.ball.x + snapshot.ball.vx * 0.1;
     inputRef.current.aimY = snapshot.ball.y + snapshot.ball.vy * 0.1;
     inputRef.current.power = 0.62;
@@ -188,7 +188,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
     const resize = () => {
       const bounds = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5) * qualityRef.current.scale;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2) * qualityRef.current.scale;
       canvas.width = Math.max(1, Math.round(bounds.width * dpr));
       canvas.height = Math.max(1, Math.round(bounds.height * dpr));
     };

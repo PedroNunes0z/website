@@ -38,6 +38,8 @@ export interface GameActor {
   dashX: number;
   dashY: number;
   lastDashSeq: number;
+  /** Tempo parado perto da bola lenta: dispara a órbita anti-trava. */
+  stall: number;
 }
 
 export interface GameObject {
@@ -75,7 +77,7 @@ const GOAL_HALF = { haxball: 85, hoquei: 62 } as Record<GameId, number>;
 const FIELD_RESTITUTION = { haxball: 0.72, hoquei: 0.92 } as Record<GameId, number>;
 const NET_RESTITUTION = { haxball: 0.16, hoquei: 0.22 } as Record<GameId, number>;
 const BALL_RADIUS = 8;
-const KICK_RANGE = 16 + BALL_RADIUS + 14;
+const KICK_RANGE = 16 + BALL_RADIUS + 16;
 const emptyInput: GameInput = { x: 0, y: 0, sprint: false, kickSeq: 0, dashSeq: 0, aimX: 0, aimY: 0, power: 0, spin: false, kickSpin: false, charging: false };
 
 export interface FieldSize { w: number; h: number }
@@ -258,7 +260,7 @@ function actor(id: string, name: string, team: GameTeam, index: number, game: Ga
     stamina: 100, sprintLock: false, sprintRest: 0,
     facingX, facingY: 0, aimX: position.x + facingX * 180,
     aimY: position.y, charge: 0, curve: false,
-    dashCooldown: 0, dashRemaining: 0, dashX: 0, dashY: 0, lastDashSeq: 0,
+    dashCooldown: 0, dashRemaining: 0, dashX: 0, dashY: 0, lastDashSeq: 0, stall: 0,
   };
 }
 
@@ -464,8 +466,12 @@ function botInput(player: GameActor, state: GameSnapshot): GameInput {
       return driveTo(player, clamp(ball.x - dir * 38, ownLo, ownHi), clamp(predictedY, -hh + 27, hh - 27));
     }
     // Ataque: passa para trás do disco (lado do próprio gol) e empurra para
-    // frente. O contato empurra o disco na direção do ataque.
-    return driveTo(player, clamp(ball.x + dir * 30, ownLo, ownHi), clamp(ball.y * 0.85, -hh + 27, hh - 27));
+    // frente. A 26 do centro o contato é garantido e religa a jogada.
+    if (player.stall > 2) {
+      const ang = state.elapsed * 3 + (hashId(player.id) % 10);
+      return driveTo(player, ball.x + Math.cos(ang) * 30, clamp(ball.y + Math.sin(ang) * 30, -hh + 27, hh - 27));
+    }
+    return driveTo(player, clamp(ball.x + dir * 26, ownLo, ownHi), clamp(ball.y * 0.85, -hh + 27, hh - 27));
   }
   // Haxball: papéis por ordem no time (0 perseguidor, 1 apoio, 2 defesa e o
   // último de 3+ vira goleiro). A mira é sempre no gol adversário, então o
@@ -476,22 +482,31 @@ function botInput(player: GameActor, state: GameSnapshot): GameInput {
   const rank = sameTeam.indexOf(player);
   const last = sameTeam.length - 1;
   const lane = ((hashId(player.id) % 3) - 1) * 26;
+  // Balanço de patrulha: ninguém fica congelado quando a bola para longe.
+  const sway = Math.sin(state.elapsed * 1.3 + hashId(player.id) * 0.7) * 14;
   const aimY = clamp(ball.y * 0.25 + Math.sin(state.elapsed * 2.1 + player.x * 0.03) * 30, -60, 60);
   const power = botShotPower(player, state);
   let targetX: number;
   let targetY: number;
   if (last > 1 && rank === last) {
     targetX = myGoalX + dir * 34;
-    targetY = clamp(ball.y * 0.5, -52, 52);
+    targetY = clamp(ball.y * 0.5 + sway * 0.5, -52, 52);
   } else if (rank === 0) {
-    targetX = ball.x - dir * 12;
-    targetY = ball.y + lane * 0.3;
+    if (player.stall > 1.2) {
+      // Travou colado na bola lenta: orbita até achar o cone do chute.
+      const ang = state.elapsed * 3 + (hashId(player.id) % 10);
+      targetX = ball.x + Math.cos(ang) * 30;
+      targetY = ball.y + Math.sin(ang) * 30;
+    } else {
+      targetX = ball.x - dir * 12;
+      targetY = ball.y + lane * 0.3;
+    }
   } else if (rank === 1) {
     targetX = clamp(ball.x + dir * 150, -hw + 40, hw - 40);
-    targetY = clamp(ball.y * 0.6 + lane, -hh + 40, hh - 40);
+    targetY = clamp(ball.y * 0.6 + lane + sway, -hh + 40, hh - 40);
   } else {
     targetX = myGoalX + dir * (Math.abs(ball.x - myGoalX) * 0.4);
-    targetY = clamp(ball.y * 0.5 + lane * 0.5, -hh + 40, hh - 40);
+    targetY = clamp(ball.y * 0.5 + lane * 0.5 + sway, -hh + 40, hh - 40);
   }
   const move = driveTo(player, targetX, targetY, 80, 8);
   return { ...move, aimX: attackX, aimY, power };
@@ -573,7 +588,7 @@ function kick(state: GameSnapshot, player: GameActor, input: GameInput) {
   if (dx * dx + dy * dy > KICK_RANGE * KICK_RANGE) return;
   const direction = resolveKickDirection(player, ball, input.aimX, input.aimY);
   if (!direction) return;
-  const speed = 680 * (0.35 + 0.65 * clamp(input.power, 0, 1));
+  const speed = 580 * (0.35 + 0.65 * clamp(input.power, 0, 1));
   ball.vx = direction.x * speed + player.vx * 0.35;
   ball.vy = direction.y * speed + player.vy * 0.35;
   ball.spin = input.kickSpin ? 8 : (ball.spin ?? 0) * 0.3;
@@ -632,15 +647,26 @@ export function stepGame(
   const max = isHaxball ? 1000 : 1050;
   const playerRadius = isHaxball ? 16 : 24;
   const playerMass = isHaxball ? 3 : 6;
-  // Encostar no corpo não dispara a bola: restituição e impulso baixos.
-  const playerRest = isHaxball ? 0.5 : 0.95;
-  const touchBoost = isHaxball ? 0.1 : 0.18;
+  // Encostar tem peso: restituição e impulso que dão sensação de contato.
+  const playerRest = isHaxball ? 0.55 : 0.95;
+  const touchBoost = isHaxball ? 0.14 : 0.18;
 
   // Amostra os inputs uma vez por tick (não por substep): corta ~3x o custo da
   // IA e o lixo de objetos sem mudar o comportamento em 16 ms.
   const tickInputs: Record<string, GameInput> = {};
   for (let i = 0; i < state.players.length; i++) {
     const player = state.players[i];
+    if (player.bot) {
+      // Anti-trava: bola lenta + bot parado por perto acumula stall e a IA
+      // passa a orbitar a bola até achar ângulo de chute ou empurrão.
+      const bdx = state.ball.x - player.x;
+      const bdy = state.ball.y - player.y;
+      const ballSpeed = Math.sqrt(state.ball.vx * state.ball.vx + state.ball.vy * state.ball.vy);
+      const botSpeed = Math.sqrt(player.vx * player.vx + player.vy * player.vy);
+      const near = isHaxball ? 130 : 150;
+      if (ballSpeed < 30 && botSpeed < 25 && bdx * bdx + bdy * bdy < near * near) player.stall += delta;
+      else player.stall = 0;
+    }
     tickInputs[player.id] = player.bot ? botInput(player, state) : (inputs[player.id] ?? emptyInput);
   }
 
@@ -1025,6 +1051,12 @@ function paintHockeyStatic(ctx: CanvasRenderingContext2D, fw: number, fh: number
   ctx.lineWidth = 5;
   ctx.strokeRect(-hw + 8, -hh + 8, fw - 16, fh - 16);
 
+  // Linhas longas recortadas no gelo: terminam no kickplate e nunca
+  // encostam nem vazam para fora das tabelas.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(-hw + 11, -hh + 11, fw - 22, fh - 22);
+  ctx.clip();
   // Linha central vermelha + círculo central azul.
   ctx.fillStyle = RED;
   ctx.fillRect(-6, -hh, 12, fh);
@@ -1045,6 +1077,7 @@ function paintHockeyStatic(ctx: CanvasRenderingContext2D, fw: number, fh: number
   // Linha do gol + crease colado na boca, tudo dentro do rinque.
   ctx.fillStyle = RED;
   for (const x of [-mouth, mouth]) ctx.fillRect(x - 2, -hh, 4, fh);
+  ctx.restore();
   ctx.save();
   ctx.beginPath();
   ctx.rect(-hw, -hh, fw, fh);
@@ -1166,11 +1199,12 @@ export interface DrawOptions {
 
 // Sprites de texto: fillText por frame é um dos custos mais altos em
 // renderização por software. Cada rótulo vira um bitmap uma vez e é copiado
-// com drawImage depois.
-const labelSprites = new Map<string, HTMLCanvasElement>();
+// com drawImage depois. Supersample 2x para não pixelizar no hidpi.
+const labelSprites = new Map<string, { img: HTMLCanvasElement; w: number; h: number }>();
 let measureContext: CanvasRenderingContext2D | null = null;
+const SPRITE_SS = 2;
 
-function labelSprite(text: string, font: string, fill: string): HTMLCanvasElement | null {
+function labelSprite(text: string, font: string, fill: string): { img: HTMLCanvasElement; w: number; h: number } | null {
   if (typeof document === "undefined") return null;
   const key = `${font}|${fill}|${text}`;
   const cached = labelSprites.get(key);
@@ -1184,16 +1218,18 @@ function labelSprite(text: string, font: string, fill: string): HTMLCanvasElemen
   measureContext.font = font;
   const w = Math.max(1, Math.ceil(measureContext.measureText(text).width) + 6);
   const h = 16;
-  const sprite = document.createElement("canvas");
-  sprite.width = w;
-  sprite.height = h;
-  const g = sprite.getContext("2d");
+  const img = document.createElement("canvas");
+  img.width = w * SPRITE_SS;
+  img.height = h * SPRITE_SS;
+  const g = img.getContext("2d");
   if (!g) return null;
+  g.scale(SPRITE_SS, SPRITE_SS);
   g.font = font;
   g.textAlign = "center";
   g.textBaseline = "middle";
   g.fillStyle = fill;
   g.fillText(text, w / 2, h / 2 + 0.5);
+  const sprite = { img, w, h };
   labelSprites.set(key, sprite);
   return sprite;
 }
@@ -1249,7 +1285,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
       ctx.strokeStyle = onIce ? "#ffffff" : "#ffd166"; ctx.stroke();
     }
     const letter = labelSprite(player.bot ? "B" : "P", "bold 10px monospace", letterFill(player.team));
-    if (letter) ctx.drawImage(letter, player.x - letter.width / 2, player.y + 1 - letter.height / 2);
+    if (letter) ctx.drawImage(letter.img, player.x - letter.w / 2, player.y + 1 - letter.h / 2, letter.w, letter.h);
     if (state.game === "haxball" && player.id === localPlayerId) {
       const barWidth = 42;
       ctx.fillStyle = "rgba(0,0,0,.8)";
@@ -1262,7 +1298,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
     if (!opts.hideNames) {
       const nameCenterY = player.y - radius - (onIce ? 13 : 41);
       const name = labelSprite(player.name.slice(0, 12), "10px monospace", onIce ? "#111111" : "#ffffff");
-      if (name) ctx.drawImage(name, player.x - name.width / 2, nameCenterY - name.height / 2);
+      if (name) ctx.drawImage(name.img, player.x - name.w / 2, nameCenterY - name.h / 2, name.w, name.h);
     }
   }
 
