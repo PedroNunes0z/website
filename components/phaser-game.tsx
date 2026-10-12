@@ -55,7 +55,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
     gameAudio.preload();
     gameAudio.startMatch();
     gameAudio.stopMenu();
-    startCountdown();
+    startCountdown(600);
     let destroyed = false;
     let phaserGame: { destroy: (removeCanvas: boolean) => void } | null = null;
 

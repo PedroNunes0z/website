@@ -24,15 +24,15 @@ export function useCountdown() {
     setCount(null);
   }, []);
 
-  const start = useCallback(() => {
+  const start = useCallback((beatMs = 0) => {
     cancel();
     frozenRef.current = true;
     console.info("[Game] Contagem 1-2-3-JÁ iniciada.");
     const steps: Array<[CountValue, number, boolean]> = [
-      [1, 350, false],
-      [2, 1100, false],
-      [3, 1850, false],
-      [0, 2600, true],
+      [1, 350 + beatMs, false],
+      [2, 1100 + beatMs, false],
+      [3, 1850 + beatMs, false],
+      [0, 2600 + beatMs, true],
     ];
     for (const [value, at, final] of steps) {
       timers.current.push(window.setTimeout(() => {

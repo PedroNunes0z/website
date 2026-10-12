@@ -88,14 +88,14 @@ export function pickTeamFlags(): Record<GameTeam, string> {
   return { blue: TEAM_FLAG_POOL[a], orange: TEAM_FLAG_POOL[b] };
 }
 
-// Fundo claro do jogador a partir da cor principal da bandeira.
+// Fundo do jogador na cor forte da bandeira (nada de tom pastel).
 const FLAG_BG: Record<string, string> = {
-  br: "#a9e6b8", de: "#ffe08a", fr: "#bcd6ff", ar: "#bfe6ff",
-  es: "#ffb3ab", it: "#b5e6c3", pt: "#b7e4c5", nl: "#ffd2a8",
-  uy: "#bfe0ff", co: "#ffe49a", mx: "#a9e3bb", us: "#c3d4ef",
-  jp: "#ffd9de", kr: "#cfe0ff", sn: "#b9e6b9", ma: "#ffb3b3",
-  hr: "#ffb8b8", be: "#ffe08a", ch: "#ff9d9d", se: "#b8d9ff",
-  gb: "#c9d6ea", ca: "#ffb0a8", no: "#ff9f9f", dk: "#ff9d9d",
+  br: "#009c3b", de: "#ffce00", fr: "#0055a4", ar: "#74acdf",
+  es: "#c60b1e", it: "#009246", pt: "#046a38", nl: "#ff5f00",
+  uy: "#0038a8", co: "#fcd116", mx: "#006847", us: "#3c3b6e",
+  jp: "#bc002d", kr: "#0047a0", sn: "#00853f", ma: "#c1272d",
+  hr: "#ff0000", be: "#fdda24", ch: "#da291c", se: "#006aa7",
+  gb: "#012169", ca: "#ff0000", no: "#ba0c2f", dk: "#c8102e",
 };
 
 /** Tom claro da bandeira para o fundo do jogador, ou nulo se desconhecida. */

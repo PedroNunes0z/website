@@ -103,7 +103,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   useEffect(() => {
     // Dono iniciou: contagem para todo mundo que está no campo.
     if (mode === "online" && roomStatus === "playing" && room?.ownerId === playerId && !!ownerToken) {
-      startCountdown();
+      startCountdown(600);
     }
   }, [roomStatus, mode, room, playerId, ownerToken, startCountdown]);
   useEffect(() => {
@@ -131,7 +131,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     replayRef.current = null;
     matchPointRef.current = false;
     gameAudio.stopStomps();
-    if (mode === "bot") startCountdown();
+    if (mode === "bot") startCountdown(600);
   }, [game, mode, bots, roomId, roomStatus, startCountdown]);
 
   useEffect(() => {
@@ -176,7 +176,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     setReplayBadge(false);
     bufferRef.current = [];
     phaseRef.current = "play";
-    if (!stateRef.current.winner) startCountdown();
+    if (!stateRef.current.winner) startCountdown(600);
   }, [startCountdown]);
 
   // Chute sem mira: encostou na bola (38px) + clique/Espaço = chute de
@@ -243,7 +243,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     gameAudio.preload();
     gameAudio.startMatch();
     gameAudio.stopMenu();
-    if (mode === "bot") startCountdown();
+    if (mode === "bot") startCountdown(600);
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d", { alpha: false, desynchronized: true });
     if (!canvas || !ctx) return;
@@ -591,7 +591,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
       // partida em andamento, cancela a contagem e segue o jogo.
       if (firstEver) {
         if (snapshot.elapsed > 5) cancelCountdown();
-        else startCountdown();
+        else startCountdown(600);
       }
       console.info(`[Net] Estado autoritativo adotado (rev=${snapshot.revision}, relógio=${snapshot.elapsed.toFixed(2)}s${hard ? ", adoção dura" : ""}).`);
     }
