@@ -58,6 +58,8 @@ class GameAudio {
   private crowd: GainNode | null = null;
   private crowdSource: AudioBufferSourceNode | null = null;
   private menuSource: AudioBufferSourceNode | null = null;
+  private stompsSource: AudioBufferSourceNode | null = null;
+  private menuWanted = false;
   private buffers = new Map<string, AudioBuffer>();
   private loading: Promise<void> | null = null;
   private dashFlip = false;
@@ -143,12 +145,19 @@ class GameAudio {
           this.buffers.set(key, buffer);
         }),
       );
+      // Se o menu pediu tema antes de terminar de baixar, começa agora.
+      if (this.menuWanted) this.startMenuLoop();
     })();
   }
 
-  /** Tema dos menus em loop (bri baixo para não brigar com cliques). */
+  /** Tema dos menus em loop baixo. Toca sozinho quando liberado o áudio. */
   playMenu(): void {
+    this.menuWanted = true;
     this.ensure();
+    this.startMenuLoop();
+  }
+
+  private startMenuLoop(): void {
     if (!this.ctx || !this.master || this.menuSource) return;
     const buffer = this.buffers.get("menuTheme");
     if (!buffer) return;
@@ -163,12 +172,38 @@ class GameAudio {
   }
 
   stopMenu(): void {
+    this.menuWanted = false;
     try {
       this.menuSource?.stop();
     } catch {
       // já parado
     }
     this.menuSource = null;
+  }
+
+  /** Batidas de match-point em loop: ponto do título empatado. */
+  startStomps(): void {
+    this.ensure();
+    if (!this.ctx || !this.master || this.stompsSource) return;
+    const buffer = this.buffers.get("stomps");
+    if (!buffer) return;
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    source.loop = true;
+    const gain = this.ctx.createGain();
+    gain.gain.value = 0.5;
+    source.connect(gain).connect(this.master);
+    source.start();
+    this.stompsSource = source;
+  }
+
+  stopStomps(): void {
+    try {
+      this.stompsSource?.stop();
+    } catch {
+      // já parado
+    }
+    this.stompsSource = null;
   }
 
   /** Torcida de fundo da partida em loop baixo. */
@@ -181,7 +216,7 @@ class GameAudio {
     source.buffer = buffer;
     source.loop = true;
     this.crowd = this.ctx.createGain();
-    this.crowd.gain.value = 0.12;
+    this.crowd.gain.value = 0.05;
     source.connect(this.crowd).connect(this.master);
     source.start();
     this.crowdSource = source;
@@ -283,9 +318,9 @@ class GameAudio {
   private cheer(): void {
     if (!this.ctx || this.muted) return;
     if (Math.random() < 0.5) {
-      this.playSample("commentaryA", jitter(1, 0.02), 0.9, undefined, 0.15);
+      this.playSample("commentaryA", jitter(1, 0.02), 1.0, undefined, 0.15);
     } else {
-      this.playSample("commentaryB", jitter(1, 0.02), 0.9, undefined, 0.15);
+      this.playSample("commentaryB", jitter(1, 0.02), 1.0, undefined, 0.15);
     }
     this.playSample("crowdGoal", jitter(1, 0.03), 0.85, undefined, 0.1);
     this.playSample("stadiumGoal", jitter(1, 0.03), 0.7);
@@ -294,8 +329,8 @@ class GameAudio {
       const now = this.ctx.currentTime;
       this.crowd.gain.cancelScheduledValues(now);
       this.crowd.gain.setValueAtTime(this.crowd.gain.value, now);
-      this.crowd.gain.linearRampToValueAtTime(0.5, now + 0.2);
-      this.crowd.gain.exponentialRampToValueAtTime(0.12, now + 4);
+      this.crowd.gain.linearRampToValueAtTime(0.3, now + 0.2);
+      this.crowd.gain.exponentialRampToValueAtTime(0.05, now + 4);
     } else {
       this.thump(110, 0.3, 0.4);
     }
@@ -339,15 +374,15 @@ class GameAudio {
         }
         break;
       case "net":
-        if (!this.playSample("net", jitter(1, 0.04), 1.0 * power)) {
+        if (!this.playSample("net", jitter(1, 0.04), 0.6 * power)) {
           this.noiseHit(0.2, 1000, 0.6 * power);
         }
         break;
       case "commentary":
         if (Math.random() < 0.5) {
-          this.playSample("commentaryA", jitter(1, 0.02), 0.9 * power);
+          this.playSample("commentaryA", jitter(1, 0.02), 1.0 * power);
         } else {
-          this.playSample("commentaryB", jitter(1, 0.02), 0.9 * power);
+          this.playSample("commentaryB", jitter(1, 0.02), 1.0 * power);
         }
         break;
       case "ui":

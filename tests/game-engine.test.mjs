@@ -235,13 +235,13 @@ test("gol adiado: onGoal avisa sem marcar nem gelar (replay decide o placar)", (
   assert.ok(state.freeze > 0);
 });
 
-test("haxball anda com teto de 120 (movimentação mais lenta)", () => {
+test("haxball anda com teto de 95 (movimentação mais lenta)", () => {
   const state = createOnlineGame("haxball", roster, FULL_FIELD);
   const player = state.players[0];
   state.ball.x = 300;
   state.ball.y = 180;
   for (let frame = 0; frame < 180; frame++) stepGame(state, { white: input({ x: 1 }) }, {}, 1 / 60);
-  assert.ok(Math.hypot(player.vx, player.vy) <= 120.01);
+  assert.ok(Math.hypot(player.vx, player.vy) <= 95.01);
 });
 
 test("campo 2x2 é menor e o gol acompanha a boca da rede", () => {

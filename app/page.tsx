@@ -78,7 +78,7 @@ export default async function Home() {
       <main>
         <section className="hero shell" aria-labelledby="hero-title">
           <div className="hero-copy">
-            <p className="eyebrow"><span /> Full Stack Developer</p>
+            <p className="eyebrow">Full Stack Developer</p>
             <h1 id="hero-title">
               Software com
               <strong>engenharia, clareza</strong>

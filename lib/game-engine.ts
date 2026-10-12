@@ -388,29 +388,36 @@ function steer(player: GameActor, input: GameInput, dt: number, game: GameId, hw
     }
     if (input.dashSeq > player.lastDashSeq) {
       player.lastDashSeq = input.dashSeq;
-      const dx = input.aimX - player.x;
-      const dy = input.aimY - player.y;
-      const aimLength = Math.sqrt(dx * dx + dy * dy);
-      if (player.stamina >= 28 && player.dashCooldown === 0 && aimLength > 3) {
+      // Dash na direção do movimento; parado, segue a direção do corpo.
+      let dx = ix;
+      let dy = iy;
+      let runLength = hasInput ? length : 0;
+      if (!hasInput) {
+        const facingLength = Math.sqrt(player.facingX * player.facingX + player.facingY * player.facingY);
+        dx = player.facingX;
+        dy = player.facingY;
+        runLength = facingLength;
+      }
+      if (player.stamina >= 28 && player.dashCooldown === 0 && runLength > 0.1) {
         player.stamina -= 28;
         player.sprintRest = 0;
         player.dashCooldown = 1.2;
         player.dashRemaining = 0.13;
-        player.dashX = dx / aimLength;
-        player.dashY = dy / aimLength;
+        player.dashX = dx / runLength;
+        player.dashY = dy / runLength;
         if (player.stamina === 0) player.sprintLock = true;
       }
     }
   }
   const dashing = game === "haxball" && player.dashRemaining > 0;
-  const max = game === "haxball" ? (dashing ? 300 : player.bot ? 120 : sprinting ? 165 : 120) : 260;
+  const max = game === "haxball" ? (dashing ? 300 : player.bot ? 95 : sprinting ? 130 : 95) : 230;
   if (dashing) {
     player.vx = player.dashX * max;
     player.vy = player.dashY * max;
     player.dashRemaining = Math.max(0, player.dashRemaining - dt);
   } else {
     const reversing = ix * player.vx + iy * player.vy < -1;
-    const acceleration = game === "haxball" ? (reversing ? 1500 : 1100) : 2200;
+    const acceleration = game === "haxball" ? (reversing ? 1200 : 900) : 1900;
     player.vx += (ix / length) * acceleration * dt;
     player.vy += (iy / length) * acceleration * dt;
     if (!hasInput) {
@@ -593,7 +600,7 @@ function kick(state: GameSnapshot, player: GameActor, input: GameInput) {
   if (dx * dx + dy * dy > KICK_RANGE * KICK_RANGE) return;
   const direction = resolveKickDirection(player, ball, input.aimX, input.aimY);
   if (!direction) return;
-  const speed = 580 * (0.35 + 0.65 * clamp(input.power, 0, 1));
+  const speed = 500 * (0.35 + 0.65 * clamp(input.power, 0, 1));
   ball.vx = direction.x * speed + player.vx * 0.35;
   ball.vy = direction.y * speed + player.vy * 0.35;
   ball.spin = input.kickSpin ? 8 : (ball.spin ?? 0) * 0.3;
@@ -658,7 +665,7 @@ export function stepGame(
   const goalHalf = GOAL_HALF[state.game];
   const friction = isHaxball ? 0.6 : 0.45;
   const stopSq = isHaxball ? 64 : 36;
-  const max = isHaxball ? 1000 : 1050;
+  const max = isHaxball ? 850 : 950;
   const playerRadius = isHaxball ? 16 : 24;
   const playerMass = isHaxball ? 3 : 6;
   // Encostar tem peso: restituição e impulso que dão sensação de contato.
@@ -896,12 +903,6 @@ export function reconcileAuthoritativeState(
 // ---------------------------------------------------------------------------
 // Renderização dos campos
 // ---------------------------------------------------------------------------
-
-function netBulge(ball: GameObject, side: -1 | 1, mouth: number): number {
-  if (Math.sign(ball.x) !== side || Math.abs(ball.x) <= mouth) return 0;
-  const depth = GOAL_DEPTH.haxball;
-  return clamp((Math.abs(ball.x) - mouth) / depth, 0, 1) * 14;
-}
 
 function drawNetMesh(
   ctx: CanvasRenderingContext2D,
@@ -1318,24 +1319,6 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
     else paintHockeyStatic(ctx, state.field.w, state.field.h);
   }
 
-  // Barriga da rede: só a rede ocupada é redesenhada por cima, e só enquanto
-  // a bola está no pano.
-  const mouth = goalMouth(state.game, state.field.w / 2);
-  if (state.game === "haxball"
-    && Math.abs(state.ball.x) > mouth
-    && Math.abs(state.ball.y) < GOAL_HALF.haxball) {
-    const side = state.ball.x > 0 ? 1 : -1;
-    const depth = GOAL_DEPTH.haxball;
-    const goalHalf = GOAL_HALF.haxball;
-    const bulge = netBulge(state.ball, side as -1 | 1, mouth);
-    const x = side < 0 ? -mouth - depth - bulge : mouth;
-    drawNetMesh(ctx, x, -goalHalf, depth + bulge, goalHalf * 2, bulge, side < 0);
-    ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 3;
-    ctx.strokeRect(x, -goalHalf, depth + bulge, goalHalf * 2);
-  }
-
-  // Azul contra vermelho no gelo; branco contra laranja no gramado.
   const onIce = state.game === "hoquei";
   const homeFill = onIce ? "#2456e6" : "#fffdf9";
   const awayFill = onIce ? "#d7263d" : "#ff8d4f";

@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, Copy, Maximize2, Minimize2, RefreshCcw, Users, V
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { applyGoal, createBotGame, createOnlineGame, drawGame, goalMouth, pointerToField, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameActor, type GameInput, type GameObject, type GameSnapshot } from "@/lib/game-engine";
+import { applyGoal, createBotGame, createOnlineGame, drawGame, goalMouth, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameActor, type GameInput, type GameObject, type GameSnapshot } from "@/lib/game-engine";
 import type { GameId, GameRoom, GameTeam } from "@/lib/games";
 import { gameAudio } from "@/lib/game-audio";
 import { usePhaserEngine } from "@/lib/game-server";
@@ -72,6 +72,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   const prevBallRef = useRef({ x: 0, y: 0, vx: 0, vy: 0 });
   const postSfxAtRef = useRef(0);
   const prevDashRef = useRef(false);
+  const matchPointRef = useRef(false);
   const droppedRef = useRef(0);
   // Degradação automática de qualidade quando o render não acompanha.
   const qualityRef = useRef({ scale: 1, slow: 0, fast: 0 });
@@ -125,6 +126,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     pendingGoalRef.current = null;
     bufferRef.current = [];
     replayRef.current = null;
+    matchPointRef.current = false;
+    gameAudio.stopStomps();
     if (mode === "bot") gameAudio.play("whistleStart", 1);
   }, [game, mode, bots, roomId, roomStatus]);
 
@@ -462,6 +465,16 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
       if (now - hudTime > 180) {
         const state = stateRef.current;
         setHud({ blue: state.score.blue, orange: state.score.orange, elapsed: state.elapsed, winner: state.winner });
+        // Match-point empatado: batidas em loop até sair o gol do título.
+        const target = state.game === "haxball" ? 5 : 7;
+        const matchPoint = !state.winner && state.score.blue === state.score.orange && state.score.blue === target - 1;
+        if (matchPoint && !matchPointRef.current) {
+          matchPointRef.current = true;
+          gameAudio.startStomps();
+        } else if (!matchPoint && matchPointRef.current) {
+          matchPointRef.current = false;
+          gameAudio.stopStomps();
+        }
         hudTime = now;
       }
 
@@ -469,7 +482,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     };
 
     frame = requestAnimationFrame(run);
-    return () => { cancelAnimationFrame(frame); observer.disconnect(); gameAudio.stopMatch(); };
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); gameAudio.stopMatch(); gameAudio.stopStomps(); };
   }, [game, mode, playerId, ownerToken, quality, finishReplay]);
 
   const acceptTarget = useCallback((snapshot: GameSnapshot, hard = false) => {
@@ -705,14 +718,6 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     return () => { active = false; clearTimeout(timer); };
   }, [game, mode, roomId, playerId, udpLive, resync]);
 
-  const updateAim = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas || game !== "haxball") return;
-    const aim = pointerToField(canvas, event.clientX, event.clientY);
-    inputRef.current.aimX = aim.x;
-    inputRef.current.aimY = aim.y;
-  };
-
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     event.currentTarget.focus();
     gameAudio.ensure();
@@ -721,7 +726,6 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
       return;
     }
     if (game !== "haxball" || event.button !== 0) return;
-    updateAim(event);
     triggerKick();
   };
 
@@ -761,7 +765,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         </div>
         {replayBadge && <button type="button" className="game-replay-badge" onClick={() => finishReplay()}><strong>Replay</strong> · clique para pular</button>}
 
-        <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? ", clique ou Espaço para chutar" : ""}`} onPointerDown={onPointerDown} onPointerMove={updateAim} onPointerEnter={updateAim} onContextMenu={(event) => event.preventDefault()} />
+        <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? ", clique ou Espaço para chutar" : ""}`} onPointerDown={onPointerDown} onContextMenu={(event) => event.preventDefault()} />
         <TouchControls game={game} touchRef={touchRef} keysRef={keysRef} onKick={() => triggerKick()} onDash={() => { inputRef.current.dashSeq += 1; }} />
         {mode === "online" && room?.status === "waiting" && <div className="game-waiting">{isHost ? "Convide jogadores e clique em Iniciar partida." : "Aguardando o dono iniciar a partida."}</div>}
         {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong><span className={`score-dot ${goalNotice.team === "blue" ? homeDot : awayDot}`} /> {goalNotice.blue} <i>·</i> {goalNotice.orange}</strong><small>Equipe {teamName(game, goalNotice.team)}</small></div>}
@@ -769,7 +773,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
       </div>
 
       <div className="game-board-footer">
-        <span>WASD ou setas: mover {game === "haxball" ? " · Clique ou Espaço: chute · Shift: correr · Q: dash para o cursor" : " · Empurre o disco para marcar gols"}</span>
+        <span>WASD ou setas: mover {game === "haxball" ? " · Clique ou Espaço: chute · Shift: correr · Q: dash na direção do movimento" : " · Empurre o disco para marcar gols"}</span>
         <span className="game-board-footer-right">
           <button type="button" onClick={() => { const next = !muted; gameAudio.setMuted(next); setMuted(next); if (!next) gameAudio.ensure(); }} aria-label={muted ? "Ativar som" : "Silenciar"} title={muted ? "Ativar som" : "Silenciar"}>{muted ? <VolumeX size={15} /> : <Volume2 size={15} />} {muted ? "Mudo" : "Som"}</button>
         </span>
@@ -824,10 +828,15 @@ export function GameExperience({ game }: { game: GameId }) {
   // O FutBR tem página própria; os links de sala acompanham a página atual.
   const gamePath = game === "haxball" ? "/futbr" : `/games/${game}`;
 
-  const startMenuMusic = () => {
-    gameAudio.ensure();
-    gameAudio.playMenu();
-  };
+  // Tema do menu toca sozinho nas telas (o contexto libera no gesto).
+  useEffect(() => {
+    if (!isFutBR) return;
+    if (room?.status === "playing") return;
+    if (futScreen === "menu" || futScreen === "settings" || futScreen === "setup") {
+      gameAudio.preload();
+      gameAudio.playMenu();
+    }
+  }, [isFutBR, futScreen, room]);
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("room")?.toUpperCase() ?? "";
@@ -987,16 +996,16 @@ export function GameExperience({ game }: { game: GameId }) {
 
       <div className="game-page-heading">
         <div>
-          <p className="eyebrow"><span /> Playground / {game === "haxball" ? "01" : "02"}</p>
+          <p className="eyebrow">Playground / {game === "haxball" ? "01" : "02"}</p>
           <h1>{labels[game]}<span>.</span>{isFutBR && <em className="futbr-flag" aria-label="Brasil">🇧🇷</em>}</h1>
           <p>{descriptions[game]}</p>
         </div>
       </div>
 
       {isFutBR && futScreen === "menu" && (
-        <div className="futbr-menu" onPointerDown={startMenuMusic}>
+        <div className="futbr-menu">
           <span className="futbr-flag-lg" role="img" aria-label="Bandeira do Brasil">🇧🇷</span>
-          <p className="eyebrow"><span /> O futebol brasileiro de arena</p>
+          <p className="eyebrow">O futebol brasileiro de arena</p>
           <h2 className="futbr-logo">FutBR<span>.</span></h2>
           <p>Drible, chute no clique e até cinco por equipe. Escolha como entrar em campo.</p>
           <label className="futbr-name-row">Seu nome
@@ -1011,8 +1020,8 @@ export function GameExperience({ game }: { game: GameId }) {
       )}
 
       {isFutBR && futScreen === "settings" && (
-        <div className="futbr-menu" onPointerDown={startMenuMusic}>
-          <p className="eyebrow"><span /> Ajustes</p>
+        <div className="futbr-menu">
+          <p className="eyebrow">Ajustes</p>
           <h2 className="futbr-logo">Opções<span>.</span></h2>
           <div className="futbr-settings">
             <label>Volume do jogo
