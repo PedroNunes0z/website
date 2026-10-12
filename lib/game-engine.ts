@@ -600,7 +600,7 @@ function kick(state: GameSnapshot, player: GameActor, input: GameInput) {
   if (dx * dx + dy * dy > KICK_RANGE * KICK_RANGE) return;
   const direction = resolveKickDirection(player, ball, input.aimX, input.aimY);
   if (!direction) return;
-  const speed = 500 * (0.35 + 0.65 * clamp(input.power, 0, 1));
+  const speed = 430 * (0.35 + 0.65 * clamp(input.power, 0, 1));
   ball.vx = direction.x * speed + player.vx * 0.35;
   ball.vy = direction.y * speed + player.vy * 0.35;
   ball.spin = input.kickSpin ? 8 : (ball.spin ?? 0) * 0.3;
@@ -1228,6 +1228,8 @@ function fieldLayer(game: GameId, fw: number, fh: number, w: number, h: number):
 export interface DrawOptions {
   /** Degradação: pula os nomes dos jogadores para poupar rasterização. */
   hideNames?: boolean;
+  /** Câmera dinâmica: centro seguido e zoom (1 = campo inteiro). */
+  cam?: { x: number; y: number; zoom: number };
 }
 
 // Sprites de texto: fillText por frame é um dos custos mais altos em
@@ -1302,10 +1304,15 @@ function drawShield(ctx: CanvasRenderingContext2D, x: number, y: number, r: numb
 
 export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, localPlayerId: string, opts: DrawOptions = {}) {
   const { width, height } = ctx.canvas;
-  const scale = Math.min(width / 1160, height / VIEW_HEIGHT);
+  const cam = opts.cam;
+  const zoom = cam?.zoom ?? 1;
+  const camX = cam?.x ?? 0;
+  const camY = cam?.y ?? 0;
+  const scale = Math.min(width / 1160, height / VIEW_HEIGHT) * zoom;
   const layer = fieldLayer(state.game, state.field.w, state.field.h, width, height);
   // Transformação direta em vez de save/translate/scale: exata e sem pilha.
-  ctx.setTransform(scale, 0, 0, scale, width / 2, height / 2);
+  // Com câmera, o centro seguido cai no meio da tela em qualquer zoom.
+  ctx.setTransform(scale, 0, 0, scale, width / 2 - camX * scale, height / 2 - camY * scale);
   if (layer) {
     // O blit cobre o canvas inteiro 1:1: sem clearRect/fillRect por cima.
     ctx.drawImage(layer, -580, -380, 1160, 760);
@@ -1314,7 +1321,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = state.game === "haxball" ? "#0d1a0f" : "#101418";
     ctx.fillRect(0, 0, width, height);
-    ctx.setTransform(scale, 0, 0, scale, width / 2, height / 2);
+    ctx.setTransform(scale, 0, 0, scale, width / 2 - camX * scale, height / 2 - camY * scale);
     if (state.game === "haxball") paintHaxballStatic(ctx, state.field.w, state.field.h);
     else paintHockeyStatic(ctx, state.field.w, state.field.h);
   }
@@ -1329,11 +1336,6 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
     if (player.flash > 0) {
       ctx.fillStyle = `rgba(255,255,255,${Math.min(0.65, (player.flash / 0.18) * 0.65)})`;
       ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2); ctx.fill();
-    }
-    if (player.id === localPlayerId) {
-      ctx.beginPath(); ctx.arc(player.x, player.y, radius + 4, 0, Math.PI * 2);
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = onIce ? "#ffffff" : "#ffd166"; ctx.stroke();
     }
     // Emblema do time: escudo com estrela em contraste com o uniforme.
     // Vetorial, então rende igual em qualquer sistema, sem fonte emoji.

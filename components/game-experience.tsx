@@ -137,6 +137,33 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
   }, []);
 
+  useEffect(() => {
+    // Tela cheia automática ao entrar na partida. Sem gesto recente o
+    // navegador recusa em silêncio e o botão da HUD assume.
+    const board = boardRef.current;
+    if (!board || document.fullscreenElement) return;
+    try {
+      const request = board.requestFullscreen() as unknown as Promise<void> | undefined;
+      request?.catch(() => undefined);
+    } catch {
+      // segue sem tela cheia
+    }
+    return () => {
+      if (document.fullscreenElement === board) {
+        try {
+          const exit = document.exitFullscreen() as unknown as Promise<void> | undefined;
+          exit?.catch(() => undefined);
+        } catch {
+          // já saiu
+        }
+      }
+    };
+  }, []);
+
+  // Câmera dinâmica: segue o jogador com antecipação e zoom, sem mostrar o
+  // vazio fora do campo.
+  const camRef = useRef({ x: 0, y: 0 });
+
   // Encerra o replay e volta ao jogo (placar já aplicado antes do replay).
   const finishReplay = useCallback(() => {
     if (phaseRef.current !== "replay") return;
@@ -362,6 +389,28 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
       const hideNames = quality === "low" || qualityRef.current.scale < 1;
       const tRender0 = performance.now();
 
+      // Câmera: mira o jogador com antecipação da velocidade e suaviza.
+      const st = stateRef.current;
+      const fw = st.field.w;
+      const fh = st.field.h;
+      const zoom = Math.min(1.81, fw / 640, fh / 420);
+      const meCam = st.players.find((actor) => actor.id === localId) ?? null;
+      const look = 1 - Math.exp(-dt * 4.5);
+      camRef.current.x += ((meCam ? meCam.x + meCam.vx * 0.25 : 0) - camRef.current.x) * look;
+      camRef.current.y += ((meCam ? meCam.y + meCam.vy * 0.25 : 0) - camRef.current.y) * look;
+      const viewW = 1160 / zoom;
+      const viewH = 760 / zoom;
+      const margin = 60;
+      const loX = -fw / 2 - margin + viewW / 2;
+      const hiX = fw / 2 + margin - viewW / 2;
+      const loY = -fh / 2 - margin + viewH / 2;
+      const hiY = fh / 2 + margin - viewH / 2;
+      const cam = {
+        x: loX > hiX ? 0 : Math.max(loX, Math.min(hiX, camRef.current.x)),
+        y: loY > hiY ? 0 : Math.max(loY, Math.min(hiY, camRef.current.y)),
+        zoom,
+      };
+
       // Anel do replay: guarda os últimos ~12s com carimbo de tempo da sim.
       // O carimbo garante 1x na reprodução em qualquer taxa de quadros.
       // Congelado na contagem: nada para gravar.
@@ -394,13 +443,13 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         }
         if (replayTRef.current >= replay.duration) {
           finishReplay();
-          drawGame(ctx, stateRef.current, localId, { hideNames });
+          drawGame(ctx, stateRef.current, localId, { hideNames, cam });
         } else {
           const frame = replay.frames[replay.index];
-          drawGame(ctx, { ...stateRef.current, players: frame.players, ball: frame.ball }, localId, { hideNames });
+          drawGame(ctx, { ...stateRef.current, players: frame.players, ball: frame.ball }, localId, { hideNames, cam });
         }
       } else {
-        drawGame(ctx, stateRef.current, localId, { hideNames });
+        drawGame(ctx, stateRef.current, localId, { hideNames, cam });
       }
 
       // Áudio: chute e disco (salto de velocidade), parede e tabelas

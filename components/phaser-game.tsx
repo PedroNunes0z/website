@@ -41,6 +41,16 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
   const { count: countValue, start: startCountdown, frozenRef: countdownFrozen } = useCountdown();
 
   useEffect(() => {
+    // Tela cheia automática ao entrar na partida (sem gesto, recusa quieta).
+    const host = hostRef.current;
+    if (host && !document.fullscreenElement) {
+      try {
+        const request = host.requestFullscreen() as unknown as Promise<void> | undefined;
+        request?.catch(() => undefined);
+      } catch {
+        // segue sem tela cheia
+      }
+    }
     gameAudio.preload();
     gameAudio.startMatch();
     gameAudio.stopMenu();
@@ -76,6 +86,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
         gameAudio.play("kick", 0.7, game);
       };
       let prevDash = false;
+      const camPos = { x: WORLD_W / 2, y: WORLD_H / 2 };
 
       class ArenaScene extends Phaser.Scene {
         private gfx!: Phaser.GameObjects.Graphics;
@@ -138,6 +149,27 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             if (dashing && !prevDash) gameAudio.play("dash", 0.8, game);
             prevDash = dashing;
           }
+          // Câmera dinâmica: segue o jogador com zoom, sem mostrar o vazio.
+          const fw = state.field.w;
+          const fh = state.field.h;
+          const zoom = Math.min(1.81, fw / 640, fh / 420);
+          const cam = this.cameras.main;
+          cam.setZoom(zoom);
+          const hero = state.players.find((p) => p.id === "local");
+          const look = 1 - Math.exp(-dt * 4.5);
+          camPos.x += (((hero ? hero.x + hero.vx * 0.25 : 0) + WORLD_W / 2) - camPos.x) * look;
+          camPos.y += (((hero ? hero.y + hero.vy * 0.25 : 0) + WORLD_H / 2) - camPos.y) * look;
+          const viewW = WORLD_W / zoom;
+          const viewH = WORLD_H / zoom;
+          const margin = 60;
+          const loX = WORLD_W / 2 - fw / 2 - margin + viewW / 2;
+          const hiX = WORLD_W / 2 + fw / 2 + margin - viewW / 2;
+          const loY = WORLD_H / 2 - fh / 2 - margin + viewH / 2;
+          const hiY = WORLD_H / 2 + fh / 2 + margin - viewH / 2;
+          cam.centerOn(
+            loX > hiX ? WORLD_W / 2 : Math.max(loX, Math.min(hiX, camPos.x)),
+            loY > hiY ? WORLD_H / 2 : Math.max(loY, Math.min(hiY, camPos.y)),
+          );
           this.draw(state);
         }
 
@@ -148,7 +180,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           const oy = WORLD_H / 2 - FIELD_H / 2;
           if (s.game === "haxball") this.drawPitch(g, ox, oy, s);
           else this.drawRink(g, ox, oy);
-          // Jogadores sem borda preta; só o anel de destaque de quem joga.
+          // Jogadores sem borda: círculo do time e estrela, sem anel.
           // Azul contra vermelho no gelo, bandeira do time no peito.
           for (let i = 0; i < s.players.length; i++) {
             const p = s.players[i];
@@ -161,10 +193,6 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             if (p.flash > 0) {
               g.fillStyle(0xffffff, Math.min(0.65, (p.flash / 0.18) * 0.65));
               g.fillCircle(px, py, r);
-            }
-            if (p.id === "local") {
-              g.lineStyle(3, s.game === "haxball" ? 0xffd166 : 0xffffff, 1);
-              g.strokeCircle(px, py, r + 4);
             }
             this.starTexts[i]?.setPosition(px, py + 1);
           }
@@ -291,6 +319,14 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
     return () => {
       destroyed = true;
       gameAudio.stopMatch();
+      if (host && document.fullscreenElement === host) {
+        try {
+          const exit = document.exitFullscreen() as unknown as Promise<void> | undefined;
+          exit?.catch(() => undefined);
+        } catch {
+          // já saiu
+        }
+      }
       phaserGame?.destroy(true);
       phaserGame = null;
     };
