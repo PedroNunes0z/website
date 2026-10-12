@@ -68,6 +68,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const replayTRef = useRef(0);
   const prevBallRef = useRef({ x: 0, y: 0, vx: 0, vy: 0 });
   const postSfxAtRef = useRef(0);
+  const droppedRef = useRef(0);
   // Degradação automática de qualidade quando o render não acompanha.
   const qualityRef = useRef({ scale: 1, slow: 0, fast: 0 });
 
@@ -75,7 +76,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const [goalNotice, setGoalNotice] = useState<{ team: GameTeam; blue: number; orange: number; id: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [networkError, setNetworkError] = useState("");
-  const [metrics, setMetrics] = useState({ ping: 0, fps: 60, sim: 60 });
+  const [metrics, setMetrics] = useState({ ping: 0, fps: 60, sim: 60, draw: 0, simMs: 0 });
   const [udpLive, setUdpLive] = useState(false);
   const [replayBadge, setReplayBadge] = useState(false);
   const [muted, setMuted] = useState(() => gameAudio.isMuted());
@@ -174,13 +175,15 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
+    const ctx = canvas?.getContext("2d", { alpha: false, desynchronized: true });
     if (!canvas || !ctx) return;
     let frame = 0;
     let lastTime = performance.now();
     let hudTime = lastTime;
     let fpsFrames = 0;
     let simSteps = 0;
+    let simMsAcc = 0;
+    let renderMsAcc = 0;
     let fpsWindowStart = lastTime;
 
     const resize = () => {
@@ -208,6 +211,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         const window = Math.max(1, now - fpsWindowStart);
         const fps = Math.round((fpsFrames * 1000) / window);
         const sim = Math.round((simSteps * 1000) / window);
+        const draw = Math.round((renderMsAcc / Math.max(1, fpsFrames)) * 10) / 10;
+        const simMs = Math.round((simMsAcc / Math.max(1, simSteps)) * 100) / 100;
         fpsRef.current = fps;
         // Degradação automática: 3 janelas lentas reduzem o render para 65%
         // (o CSS estica de volta); 6 janelas boas restauram 100%.
@@ -236,9 +241,15 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
           console.info("[Perf] FPS recuperado: render em 100%.");
         }
         // Flush único a cada 500ms: evita re-render por medição de rede.
-        setMetrics({ ping: pingRef.current, fps, sim });
+        setMetrics({ ping: pingRef.current, fps, sim, draw, simMs });
+        if (droppedRef.current > 0) {
+          console.warn(`[Perf] SIM descartou backlog ${droppedRef.current}x: física acima do teto por fatia.`);
+          droppedRef.current = 0;
+        }
         fpsFrames = 0;
         simSteps = 0;
+        simMsAcc = 0;
+        renderMsAcc = 0;
         fpsWindowStart = now;
       }
 
@@ -276,6 +287,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
       acc = Math.min(acc + dt, 0.25);
       let steps = 0;
+      const tSim0 = performance.now();
       while (acc >= STEP && steps < 4) {
         if (mode === "bot") {
           stepGame(stateRef.current, deadBall ? {} : { local: inputRef.current }, lastKicksRef.current, STEP, stepOptions);
@@ -294,11 +306,16 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         acc -= STEP;
         steps += 1;
       }
-      if (steps === 4) acc = 0;
+      if (steps === 4) {
+        acc = 0;
+        droppedRef.current += 1;
+      }
+      simMsAcc += performance.now() - tSim0;
       simSteps += steps;
 
       const localId = mode === "bot" ? "local" : (playerId ?? "");
       const hideNames = qualityRef.current.scale < 1;
+      const tRender0 = performance.now();
 
       // Anel do replay: guarda os últimos ~12s com carimbo de tempo da sim.
       // O carimbo garante 1x na reprodução em qualquer taxa de quadros.
@@ -368,6 +385,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         }
         prevBallRef.current = { x: ball.x, y: ball.y, vx: ball.vx, vy: ball.vy };
       }
+      renderMsAcc += performance.now() - tRender0;
 
       const scores = stateRef.current.score;
       const totalGoals = scores.blue + scores.orange;
@@ -694,6 +712,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
           {mode === "online" && <span className={`game-net-hud-${pingTone}`}><i aria-hidden="true" />ping {metrics.ping}ms</span>}
           <span className={`game-net-hud-${simTone}`}><i aria-hidden="true" />sim {metrics.sim}</span>
           <span className={`game-net-hud-${fpsTone}`}><i aria-hidden="true" />fps {metrics.fps}</span>
+          <span className="game-net-hud-mode"><i aria-hidden="true" />draw {metrics.draw}ms</span>
         </div>
         {replayBadge && <button type="button" className="game-replay-badge" onClick={() => finishReplay()}><strong>Replay</strong> · clique para pular</button>}
 

@@ -1164,20 +1164,58 @@ export interface DrawOptions {
   hideNames?: boolean;
 }
 
+// Sprites de texto: fillText por frame é um dos custos mais altos em
+// renderização por software. Cada rótulo vira um bitmap uma vez e é copiado
+// com drawImage depois.
+const labelSprites = new Map<string, HTMLCanvasElement>();
+let measureContext: CanvasRenderingContext2D | null = null;
+
+function labelSprite(text: string, font: string, fill: string): HTMLCanvasElement | null {
+  if (typeof document === "undefined") return null;
+  const key = `${font}|${fill}|${text}`;
+  const cached = labelSprites.get(key);
+  if (cached) return cached;
+  if (labelSprites.size >= 64) labelSprites.clear();
+  if (!measureContext) {
+    const measureCanvas = document.createElement("canvas");
+    measureContext = measureCanvas.getContext("2d");
+  }
+  if (!measureContext) return null;
+  measureContext.font = font;
+  const w = Math.max(1, Math.ceil(measureContext.measureText(text).width) + 6);
+  const h = 16;
+  const sprite = document.createElement("canvas");
+  sprite.width = w;
+  sprite.height = h;
+  const g = sprite.getContext("2d");
+  if (!g) return null;
+  g.font = font;
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  g.fillStyle = fill;
+  g.fillText(text, w / 2, h / 2 + 0.5);
+  labelSprites.set(key, sprite);
+  return sprite;
+}
+
 export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, localPlayerId: string, opts: DrawOptions = {}) {
   const { width, height } = ctx.canvas;
   const scale = Math.min(width / 1160, height / VIEW_HEIGHT);
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = state.game === "haxball" ? "#0d1a0f" : "#101418";
-  ctx.fillRect(0, 0, width, height);
-  ctx.save();
-  ctx.translate(width / 2, height / 2);
-  ctx.scale(scale, scale);
-
   const layer = fieldLayer(state.game, state.field.w, state.field.h, width, height);
-  if (layer) ctx.drawImage(layer, -580, -380, 1160, 760);
-  else if (state.game === "haxball") paintHaxballStatic(ctx, state.field.w, state.field.h);
-  else paintHockeyStatic(ctx, state.field.w, state.field.h);
+  // Transformação direta em vez de save/translate/scale: exata e sem pilha.
+  ctx.setTransform(scale, 0, 0, scale, width / 2, height / 2);
+  if (layer) {
+    // O blit cobre o canvas inteiro 1:1: sem clearRect/fillRect por cima.
+    ctx.drawImage(layer, -580, -380, 1160, 760);
+  } else {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = state.game === "haxball" ? "#0d1a0f" : "#101418";
+    ctx.fillRect(0, 0, width, height);
+    ctx.setTransform(scale, 0, 0, scale, width / 2, height / 2);
+    if (state.game === "haxball") paintHaxballStatic(ctx, state.field.w, state.field.h);
+    else paintHockeyStatic(ctx, state.field.w, state.field.h);
+  }
 
   // Barriga da rede: só a rede ocupada é redesenhada por cima, e só enquanto
   // a bola está no pano.
@@ -1210,9 +1248,8 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
       ctx.lineWidth = 3;
       ctx.strokeStyle = onIce ? "#ffffff" : "#ffd166"; ctx.stroke();
     }
-    ctx.fillStyle = letterFill(player.team);
-    ctx.font = "bold 10px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(player.bot ? "B" : "P", player.x, player.y + 1);
+    const letter = labelSprite(player.bot ? "B" : "P", "bold 10px monospace", letterFill(player.team));
+    if (letter) ctx.drawImage(letter, player.x - letter.width / 2, player.y + 1 - letter.height / 2);
     if (state.game === "haxball" && player.id === localPlayerId) {
       const barWidth = 42;
       ctx.fillStyle = "rgba(0,0,0,.8)";
@@ -1223,9 +1260,9 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
       ctx.fillRect(player.x - barWidth / 2, player.y - radius - 29, barWidth * clamp(player.stamina / 100, 0, 1), 3);
     }
     if (!opts.hideNames) {
-      ctx.fillStyle = onIce ? "#111111" : "#ffffff";
-      ctx.font = "10px monospace";
-      ctx.fillText(player.name.slice(0, 12), player.x, player.y - radius - (onIce ? 13 : 41));
+      const nameCenterY = player.y - radius - (onIce ? 13 : 41);
+      const name = labelSprite(player.name.slice(0, 12), "10px monospace", onIce ? "#111111" : "#ffffff");
+      if (name) ctx.drawImage(name, player.x - name.width / 2, nameCenterY - name.height / 2);
     }
   }
 
@@ -1264,7 +1301,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
     ctx.fillStyle = "#141414"; ctx.fill();
   }
   ctx.restore();
-  ctx.restore();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 export function pointerToField(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
