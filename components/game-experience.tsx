@@ -1111,6 +1111,7 @@ export function GameExperience({ game }: { game: GameId }) {
             <label>Seu nome nas salas
               <input value={name} maxLength={20} onChange={(event) => { setName(event.target.value); try { sessionStorage.setItem("pedro-games-name", event.target.value); } catch { /* sem storage */ } }} placeholder="Seu nome" />
             </label>
+            <button type="button" onClick={() => { gameAudio.play("ui"); gameAudio.testNarrations(); }}>Ouvir narrações (1 e 2)</button>
             <button type="button" onClick={() => { gameAudio.play("ui"); setFutScreen("menu"); }}><ArrowLeft size={15} /> Voltar ao menu</button>
           </div>
         </div>

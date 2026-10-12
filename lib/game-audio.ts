@@ -137,12 +137,16 @@ class GameAudio {
       await Promise.allSettled(
         Object.entries(FILES).map(async ([key, url]) => {
           if (this.buffers.has(key)) return;
-          const response = await fetch(url);
-          if (!response.ok) throw new Error(`audio ${response.status}`);
-          const data = await response.arrayBuffer();
-          if (!this.ctx) return;
-          const buffer = await this.ctx.decodeAudioData(data);
-          this.buffers.set(key, buffer);
+          try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`audio ${response.status}`);
+            const data = await response.arrayBuffer();
+            if (!this.ctx) return;
+            const buffer = await this.ctx.decodeAudioData(data);
+            this.buffers.set(key, buffer);
+          } catch (error) {
+            console.warn(`[Audio] falha ao carregar ${url}`, error);
+          }
         }),
       );
       // Se o menu pediu tema antes de terminar de baixar, começa agora.
@@ -314,14 +318,19 @@ class GameAudio {
     }
   }
 
+  /** Narração do gol sorteada, com a outra de reserva se faltar. */
+  private playCommentary(power: number, delay = 0): void {
+    const first = Math.random() < 0.5 ? "commentaryA" : "commentaryB";
+    const second = first === "commentaryA" ? "commentaryB" : "commentaryA";
+    if (!this.playSample(first, jitter(1, 0.02), 1.0 * power, undefined, delay)) {
+      this.playSample(second, jitter(1, 0.02), 1.0 * power, undefined, delay);
+    }
+  }
+
   /** Gol: narração sorteada, festa da torcida e fundo que incha e volta. */
   private cheer(): void {
     if (!this.ctx || this.muted) return;
-    if (Math.random() < 0.5) {
-      this.playSample("commentaryA", jitter(1, 0.02), 1.0, undefined, 0.15);
-    } else {
-      this.playSample("commentaryB", jitter(1, 0.02), 1.0, undefined, 0.15);
-    }
+    this.playCommentary(1, 0.15);
     this.playSample("crowdGoal", jitter(1, 0.03), 0.85, undefined, 0.1);
     this.playSample("stadiumGoal", jitter(1, 0.03), 0.7);
     this.playSample("stomps", jitter(1, 0.04), 0.4, undefined, 0.35);
@@ -352,6 +361,17 @@ class GameAudio {
     osc.connect(envelope).connect(this.master);
     osc.start(now);
     osc.stop(now + duration + 0.02);
+  }
+
+  /** Toca as duas narrações em sequência para conferência no menu. */
+  testNarrations(): void {
+    this.ensure();
+    if (!this.ctx) return;
+    const okA = this.playSample("commentaryA", 1, 1.0);
+    window.setTimeout(() => {
+      const okB = this.playSample("commentaryB", 1, 1.0);
+      if (!okA || !okB) console.warn(`[Audio] narração indisponível (1: ${okA}, 2: ${okB})`);
+    }, 2500);
   }
 
   play(kind: SfxKind, intensity = 1, game: GameKind = "haxball"): void {
@@ -397,11 +417,7 @@ class GameAudio {
         }
         break;
       case "commentary":
-        if (Math.random() < 0.5) {
-          this.playSample("commentaryA", jitter(1, 0.02), 1.0 * power);
-        } else {
-          this.playSample("commentaryB", jitter(1, 0.02), 1.0 * power);
-        }
+        this.playCommentary(power);
         break;
       case "ui":
         this.playSample("ui", jitter(1, 0.03), 0.6 * power);
