@@ -178,7 +178,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           const fw = state.field.w;
           const fh = state.field.h;
           const fitZoom = Math.max(1, Math.min(1160 / fw, 760 / fh) * 0.85);
-          const zoom = fitZoom * 1.5;
+          const zoom = fitZoom * 1.18;
           const cam = this.cameras.main;
           cam.setZoom(zoom);
           const hero = state.players.find((p) => p.id === "local");
@@ -187,7 +187,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           camPos.y += (((hero ? hero.y + hero.vy * 0.35 : 0) + WORLD_H / 2) - camPos.y) * look;
           const viewW = WORLD_W / zoom;
           const viewH = WORLD_H / zoom;
-          const margin = 90;
+          const margin = 40;
           const loX = WORLD_W / 2 - fw / 2 - margin + viewW / 2;
           const hiX = WORLD_W / 2 + fw / 2 + margin - viewW / 2;
           const loY = WORLD_H / 2 - fh / 2 - margin + viewH / 2;
