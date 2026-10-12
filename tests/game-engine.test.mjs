@@ -274,6 +274,30 @@ test("bola rápida empurra o jogador para trás", () => {
   assert.ok(player.vx > 20, `vx em ${player.vx}`);
 });
 
+test("cada time ganha uma bandeira distinta na partida", () => {
+  for (let i = 0; i < 5; i++) {
+    const state = createBotGame("haxball", { blue: 1, orange: 1 }, FULL_FIELD);
+    assert.ok(state.flags.blue.length > 0);
+    assert.ok(state.flags.orange.length > 0);
+    assert.notEqual(state.flags.blue, state.flags.orange);
+  }
+});
+
+test("chute acende o clarão no jogador e na bola, que apaga sozinho", () => {
+  const state = createOnlineGame("haxball", roster, FULL_FIELD);
+  const player = state.players[0];
+  state.ball.x = player.x + 30;
+  state.ball.y = player.y;
+  state.ball.vx = 0;
+  state.ball.vy = 0;
+  stepGame(state, { white: input({ kickSeq: 1, aimX: player.x + 200, aimY: player.y, power: 1 }) }, {}, 1 / 60);
+  assert.ok(player.flash > 0);
+  assert.ok((state.ball.flash ?? 0) > 0);
+  for (let frame = 0; frame < 30; frame++) stepGame(state, {}, {}, 1 / 60);
+  assert.equal(player.flash, 0);
+  assert.equal(state.ball.flash, 0);
+});
+
 test("a reconciliação aproxima o estado do host sem trocá-lo de uma vez", () => {
   const local = createOnlineGame("haxball", roster, FULL_FIELD);
   const target = createOnlineGame("haxball", roster, FULL_FIELD);

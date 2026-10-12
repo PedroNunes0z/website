@@ -75,9 +75,18 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
       class ArenaScene extends Phaser.Scene {
         private gfx!: Phaser.GameObjects.Graphics;
         private keys!: Record<string, Phaser.Input.Keyboard.Key>;
+        private flagTexts: Phaser.GameObjects.Text[] = [];
 
         create() {
           this.gfx = this.add.graphics();
+          const flagSize = isHaxball ? "15px" : "21px";
+          for (const p of state.players) {
+            const text = this.add.text(0, 0, state.flags[p.team] ?? "", {
+              fontSize: flagSize,
+              fontFamily: '"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",monospace',
+            }).setOrigin(0.5);
+            this.flagTexts.push(text);
+          }
           const kb = this.input.keyboard;
           if (kb) {
             this.keys = kb.addKeys(
@@ -133,18 +142,24 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           if (s.game === "haxball") this.drawPitch(g, ox, oy, s);
           else this.drawRink(g, ox, oy);
           // Jogadores sem borda preta; só o anel de destaque de quem joga.
-          // Azul contra vermelho no gelo.
-          for (const p of s.players) {
+          // Azul contra vermelho no gelo, bandeira do time no peito.
+          for (let i = 0; i < s.players.length; i++) {
+            const p = s.players[i];
             const r = s.game === "haxball" ? 16 : 24;
             const px = p.x + WORLD_W / 2;
             const py = p.y + WORLD_H / 2;
             const fill = p.team === "blue" ? (isHaxball ? 0xfffdf9 : 0x2456e6) : (isHaxball ? 0xff8d4f : 0xd7263d);
             g.fillStyle(fill, 1);
             g.fillCircle(px, py, r);
+            if (p.flash > 0) {
+              g.fillStyle(0xffffff, Math.min(0.65, (p.flash / 0.18) * 0.65));
+              g.fillCircle(px, py, r);
+            }
             if (p.id === "local") {
               g.lineStyle(3, s.game === "haxball" ? 0xffd166 : 0xffffff, 1);
               g.strokeCircle(px, py, r + 4);
             }
+            this.flagTexts[i]?.setPosition(px, py + 1);
           }
           // Bola / disco sem contorno.
           const bx = s.ball.x + WORLD_W / 2;
@@ -154,6 +169,11 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             g.fillCircle(bx, by, 8);
           } else {
             g.fillStyle(0x141414, 1);
+            g.fillCircle(bx, by, 8);
+          }
+          const ballFlash = s.ball.flash ?? 0;
+          if (ballFlash > 0) {
+            g.fillStyle(0xffffff, Math.min(0.6, (ballFlash / 0.18) * 0.6));
             g.fillCircle(bx, by, 8);
           }
         }

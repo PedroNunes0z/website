@@ -18,8 +18,7 @@ export interface GameActor {
   id: string;
   name: string;
   team: GameTeam;
-  bot: boolean;
-  x: number;
+  bot: boolean;  x: number;
   y: number;
   vx: number;
   vy: number;
@@ -40,6 +39,8 @@ export interface GameActor {
   lastDashSeq: number;
   /** Tempo parado perto da bola lenta: dispara a órbita anti-trava. */
   stall: number;
+  /** Clarão pós-chute (s): clareia o personagem e a bola. */
+  flash: number;
 }
 
 export interface GameObject {
@@ -49,11 +50,14 @@ export interface GameObject {
   vy: number;
   spin?: number;
   rotation?: number;
+  flash?: number;
 }
 
 export interface GameSnapshot {
   game: GameId;
   field: FieldSize;
+  /** Bandeira (emoji) sorteada por time em cada partida. */
+  flags: Record<GameTeam, string>;
   players: GameActor[];
   ball: GameObject;
   score: Record<GameTeam, number>;
@@ -66,6 +70,19 @@ export interface GameSnapshot {
 export interface BotCounts {
   blue: number;
   orange: number;
+}
+
+const TEAM_FLAGS = [
+  "🇧🇷", "🇩🇪", "🇫🇷", "🇦🇷", "🇪🇸", "🇮🇹", "🇳🇱", "🇵🇹",
+  "🇺🇾", "🇨🇴", "🇲🇽", "🇺🇸", "🇯🇵", "🇰🇷", "🇸🇳", "🇲🇦",
+  "🇭🇷", "🇧🇪", "🇨🇭", "🇸🇪",
+];
+
+/** Sorteia uma bandeira distinta por time para a partida. */
+export function pickTeamFlags(): Record<GameTeam, string> {
+  const a = Math.floor(Math.random() * TEAM_FLAGS.length);
+  const b = (a + 1 + Math.floor(Math.random() * (TEAM_FLAGS.length - 1))) % TEAM_FLAGS.length;
+  return { blue: TEAM_FLAGS[a], orange: TEAM_FLAGS[b] };
 }
 
 const FIELD_WIDTH = 1000;
@@ -260,7 +277,7 @@ function actor(id: string, name: string, team: GameTeam, index: number, game: Ga
     stamina: 100, sprintLock: false, sprintRest: 0,
     facingX, facingY: 0, aimX: position.x + facingX * 180,
     aimY: position.y, charge: 0, curve: false,
-    dashCooldown: 0, dashRemaining: 0, dashX: 0, dashY: 0, lastDashSeq: 0, stall: 0,
+    dashCooldown: 0, dashRemaining: 0, dashX: 0, dashY: 0, lastDashSeq: 0, stall: 0, flash: 0,
   };
 }
 
@@ -278,14 +295,14 @@ export function createBotGame(game: GameId, bots: BotCounts, field?: FieldSize):
   }
   const sized = field ?? fieldFor(game, players.length);
   replacePositions(players, game, sized);
-  return { game, field: sized, players, ball: { x: 0, y: 0, vx: 0, vy: 0, rotation: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
+  return { game, field: sized, flags: pickTeamFlags(), players, ball: { x: 0, y: 0, vx: 0, vy: 0, rotation: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
 }
 
 export function createOnlineGame(game: GameId, roster: GameRoomPlayer[], field?: FieldSize): GameSnapshot {
   const sized = field ?? fieldFor(game, Math.max(roster.length, 1));
   const indexes: Record<GameTeam, number> = { blue: 0, orange: 0 };
   const players = roster.map((player) => actor(player.id, player.name, player.team, indexes[player.team]++, game, false, sized.w, sized.h));
-  return { game, field: sized, players, ball: { x: 0, y: 0, vx: 0, vy: 0, rotation: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
+  return { game, field: sized, flags: pickTeamFlags(), players, ball: { x: 0, y: 0, vx: 0, vy: 0, rotation: 0 }, score: { blue: 0, orange: 0 }, elapsed: 0, freeze: 0, winner: null, revision: 0 };
 }
 
 function replacePositions(players: GameActor[], game: GameId, field: FieldSize) {
@@ -593,6 +610,8 @@ function kick(state: GameSnapshot, player: GameActor, input: GameInput) {
   ball.vy = direction.y * speed + player.vy * 0.35;
   ball.spin = input.kickSpin ? 8 : (ball.spin ?? 0) * 0.3;
   player.cooldown = 0.45;
+  player.flash = 0.18;
+  ball.flash = 0.18;
 }
 
 export interface StepOptions {
@@ -634,6 +653,8 @@ export function stepGame(
     return;
   }
   state.elapsed += delta;
+  for (const actor of state.players) actor.flash = Math.max(0, actor.flash - delta);
+  if (typeof state.ball.flash === "number") state.ball.flash = Math.max(0, state.ball.flash - delta);
   const isHaxball = state.game === "haxball";
   const hw = state.field.w / 2;
   const hh = state.field.h / 2;
@@ -791,6 +812,7 @@ export function reconcileAuthoritativeState(
   const restarted = target.elapsed + 1 < local.elapsed;
   local.score.blue = target.score.blue;
   local.score.orange = target.score.orange;
+  if (target.flags) local.flags = { ...target.flags };
   local.winner = target.winner;
   local.freeze = restarted ? target.freeze : Math.max(local.freeze, target.freeze);
   local.elapsed = restarted ? target.elapsed : Math.max(local.elapsed, target.elapsed);
@@ -1216,8 +1238,9 @@ function labelSprite(text: string, font: string, fill: string): { img: HTMLCanva
   }
   if (!measureContext) return null;
   measureContext.font = font;
-  const w = Math.max(1, Math.ceil(measureContext.measureText(text).width) + 6);
-  const h = 16;
+  const sizeMatch = font.match(/(\d+)px/);
+  const h = sizeMatch ? Math.ceil(Number(sizeMatch[1]) * 1.25) : 16;
+  const w = Math.max(h, Math.ceil(measureContext.measureText(text).width) + 6);
   const img = document.createElement("canvas");
   img.width = w * SPRITE_SS;
   img.height = h * SPRITE_SS;
@@ -1274,18 +1297,23 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
   const onIce = state.game === "hoquei";
   const homeFill = onIce ? "#2456e6" : "#fffdf9";
   const awayFill = onIce ? "#d7263d" : "#ff8d4f";
-  const letterFill = (team: GameTeam) => onIce ? "#ffffff" : team === "blue" ? "#050505" : "#120c08";
+  const emblemFont = `bold ${onIce ? 20 : 14}px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",monospace`;
   for (const player of state.players) {
     const radius = onIce ? 24 : 16;
     ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2);
     ctx.fillStyle = player.team === "blue" ? homeFill : awayFill; ctx.fill();
+    if (player.flash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(0.65, (player.flash / 0.18) * 0.65)})`;
+      ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2); ctx.fill();
+    }
     if (player.id === localPlayerId) {
       ctx.beginPath(); ctx.arc(player.x, player.y, radius + 4, 0, Math.PI * 2);
       ctx.lineWidth = 3;
       ctx.strokeStyle = onIce ? "#ffffff" : "#ffd166"; ctx.stroke();
     }
-    const letter = labelSprite(player.bot ? "B" : "P", "bold 10px monospace", letterFill(player.team));
-    if (letter) ctx.drawImage(letter.img, player.x - letter.w / 2, player.y + 1 - letter.h / 2, letter.w, letter.h);
+    // Emblema do time: bandeira sorteada na partida, no lugar da letra.
+    const emblem = labelSprite(state.flags?.[player.team] ?? (player.bot ? "B" : "P"), emblemFont, "");
+    if (emblem) ctx.drawImage(emblem.img, player.x - emblem.w / 2, player.y + 1 - emblem.h / 2, emblem.w, emblem.h);
     if (state.game === "haxball" && player.id === localPlayerId) {
       const barWidth = 42;
       ctx.fillStyle = "rgba(0,0,0,.8)";
@@ -1335,6 +1363,11 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
   } else {
     ctx.beginPath(); ctx.arc(0, 0, BALL_RADIUS, 0, Math.PI * 2);
     ctx.fillStyle = "#141414"; ctx.fill();
+  }
+  const ballFlash = state.ball.flash ?? 0;
+  if (ballFlash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${Math.min(0.6, (ballFlash / 0.18) * 0.6)})`;
+    ctx.beginPath(); ctx.arc(0, 0, BALL_RADIUS, 0, Math.PI * 2); ctx.fill();
   }
   ctx.restore();
   ctx.setTransform(1, 0, 0, 1, 0, 0);

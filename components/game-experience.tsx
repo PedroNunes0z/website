@@ -73,7 +73,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   // Degradação automática de qualidade quando o render não acompanha.
   const qualityRef = useRef({ scale: 1, slow: 0, fast: 0 });
 
-  const [hud, setHud] = useState({ blue: 0, orange: 0, elapsed: 0, winner: null as GameTeam | null });
+  const [hud, setHud] = useState({ blue: 0, orange: 0, elapsed: 0, winner: null as GameTeam | null, flags: { blue: "", orange: "" } as Record<GameTeam, string> });
   const [goalNotice, setGoalNotice] = useState<{ team: GameTeam; blue: number; orange: number; id: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [networkError, setNetworkError] = useState("");
@@ -427,7 +427,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
       if (now - hudTime > 180) {
         const state = stateRef.current;
-        setHud({ blue: state.score.blue, orange: state.score.orange, elapsed: state.elapsed, winner: state.winner });
+        setHud({ blue: state.score.blue, orange: state.score.orange, elapsed: state.elapsed, winner: state.winner, flags: state.flags });
         hudTime = now;
       }
 
@@ -729,7 +729,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
 
         <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? ", clique ou Espaço para chutar" : ""}`} onPointerDown={onPointerDown} onPointerMove={updateAim} onPointerEnter={updateAim} onContextMenu={(event) => event.preventDefault()} />
         {mode === "online" && room?.status === "waiting" && <div className="game-waiting">{isHost ? "Convide jogadores e clique em Iniciar partida." : "Aguardando o dono iniciar a partida."}</div>}
-        {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong>{goalNotice.blue} <i>·</i> {goalNotice.orange}</strong><small>Equipe {teamName(game, goalNotice.team)}</small></div>}
+        {goalNotice && <div key={goalNotice.id} className="game-goal-overlay" role="status"><span>GOOOL</span><strong>{hud.flags[goalNotice.team]} {goalNotice.blue} <i>·</i> {goalNotice.orange}</strong><small>Equipe {teamName(game, goalNotice.team)}</small></div>}
         {hud.winner && !goalNotice && <div className="game-waiting">Equipe {teamName(game, hud.winner)} venceu.</div>}
       </div>
 
