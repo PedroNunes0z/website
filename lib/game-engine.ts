@@ -71,15 +71,20 @@ const VIEW_HEIGHT = 760;
 const HALF_WIDTH = FIELD_WIDTH / 2;
 const HALF_HEIGHT = FIELD_HEIGHT / 2;
 const GOAL_DEPTH = { haxball: 70, hoquei: 42 };
+const GOAL_HALF = { haxball: 85, hoquei: 62 } as Record<GameId, number>;
+// Restituição da parede de campo (rebote vivo) vs. malha da rede (amortece).
+const FIELD_RESTITUTION = { haxball: 0.72, hoquei: 0.92 } as Record<GameId, number>;
+const NET_RESTITUTION = { haxball: 0.16, hoquei: 0.22 } as Record<GameId, number>;
+const BALL_RADIUS = 11;
 const emptyInput: GameInput = { x: 0, y: 0, sprint: false, kickSeq: 0, dashSeq: 0, aimX: 0, aimY: 0, power: 0, spin: false, kickSpin: false, charging: false };
 
 interface Segment { x1: number; y1: number; x2: number; y2: number }
 
-// Mantém a geometria física dos exemplos: a lateral tem uma abertura real
-// para o gol, e a bola rebate na rede e nas traves em vez de atravessar a borda.
+// Geometria física: a lateral tem abertura real para o gol; a bola rebate na
+// rede e nas traves em vez de atravessar a borda.
 function walls(game: GameId): Segment[] {
   const depth = GOAL_DEPTH[game];
-  const goal = game === "haxball" ? 85 : 62;
+  const goal = GOAL_HALF[game];
   return [
     { x1: -HALF_WIDTH - depth, y1: -HALF_HEIGHT, x2: HALF_WIDTH + depth, y2: -HALF_HEIGHT },
     { x1: -HALF_WIDTH - depth, y1: HALF_HEIGHT, x2: HALF_WIDTH + depth, y2: HALF_HEIGHT },
@@ -97,37 +102,56 @@ function walls(game: GameId): Segment[] {
 }
 
 const FIELD_WALLS = { haxball: walls("haxball"), hoquei: walls("hoquei") };
-const HAXBALL_NET_WALLS = FIELD_WALLS.haxball.slice(6);
+// Primeiros 6 segmentos = contorno do campo; últimos 6 = caixas das redes.
+const FIELD_BOUNDS = {
+  haxball: FIELD_WALLS.haxball.slice(0, 6),
+  hoquei: FIELD_WALLS.hoquei.slice(0, 6),
+} as Record<GameId, Segment[]>;
+const NET_WALLS = {
+  haxball: FIELD_WALLS.haxball.slice(6),
+  hoquei: FIELD_WALLS.hoquei.slice(6),
+} as Record<GameId, Segment[]>;
+const HAXBALL_NET_WALLS = NET_WALLS.haxball;
 
 function collideCircleSegment(circle: GameObject, radius: number, segment: Segment, restitution: number) {
   const dx = segment.x2 - segment.x1;
   const dy = segment.y2 - segment.y1;
-  const fraction = clamp(((circle.x - segment.x1) * dx + (circle.y - segment.y1) * dy) / (dx * dx + dy * dy || 1), 0, 1);
-  const px = segment.x1 + dx * fraction;
-  const py = segment.y1 + dy * fraction;
-  let nx = circle.x - px;
-  let ny = circle.y - py;
-  const distance = Math.hypot(nx, ny);
-  if (distance >= radius || distance === 0) return;
-  nx /= distance; ny /= distance;
-  circle.x = px + nx * radius;
-  circle.y = py + ny * radius;
-  const velocity = circle.vx * nx + circle.vy * ny;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return;
+  const relX = circle.x - segment.x1;
+  const relY = circle.y - segment.y1;
+  let t = (relX * dx + relY * dy) / lenSq;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const px = segment.x1 + dx * t;
+  const py = segment.y1 + dy * t;
+  const nx = circle.x - px;
+  const ny = circle.y - py;
+  const distSq = nx * nx + ny * ny;
+  if (distSq >= radius * radius || distSq === 0) return;
+  const distance = Math.sqrt(distSq);
+  const inv = 1 / distance;
+  const ux = nx * inv;
+  const uy = ny * inv;
+  circle.x = px + ux * radius;
+  circle.y = py + uy * radius;
+  const velocity = circle.vx * ux + circle.vy * uy;
   if (velocity < 0) {
-    circle.vx -= (1 + restitution) * velocity * nx;
-    circle.vy -= (1 + restitution) * velocity * ny;
+    circle.vx -= (1 + restitution) * velocity * ux;
+    circle.vy -= (1 + restitution) * velocity * uy;
   }
 }
 
 function collidePost(circle: GameObject, radius: number, x: number, y: number) {
   const dx = circle.x - x;
   const dy = circle.y - y;
-  const distance = Math.hypot(dx, dy);
-  if (distance >= radius + 7 || distance === 0) return;
+  const min = radius + 7;
+  const distSq = dx * dx + dy * dy;
+  if (distSq >= min * min || distSq === 0) return;
+  const distance = Math.sqrt(distSq);
   const nx = dx / distance;
   const ny = dy / distance;
-  circle.x = x + nx * (radius + 7);
-  circle.y = y + ny * (radius + 7);
+  circle.x = x + nx * min;
+  circle.y = y + ny * min;
   const velocity = circle.vx * nx + circle.vy * ny;
   if (velocity < 0) {
     circle.vx -= 1.85 * velocity * nx;
@@ -135,35 +159,60 @@ function collidePost(circle: GameObject, radius: number, x: number, y: number) {
   }
 }
 
+function ballInsideNet(ball: GameObject, game: GameId) {
+  return Math.abs(ball.x) > HALF_WIDTH && Math.abs(ball.y) < GOAL_HALF[game];
+}
+
+// Tecido da rede: além do rebote fraco nas paredes da rede, o pano "segura" a
+// bola com arrasto forte e mata o giro — por isso a bola morre no fundo em vez
+// de voltar para o campo.
+function applyNetDrag(ball: GameObject, game: GameId, sub: number) {
+  if (!ballInsideNet(ball, game)) return;
+  const drag = game === "haxball" ? 5.5 : 3.2;
+  const keep = Math.max(0, 1 - drag * sub);
+  ball.vx *= keep;
+  ball.vy *= keep;
+  if (ball.spin) {
+    ball.spin *= Math.max(0, 1 - 6 * sub);
+    if (Math.abs(ball.spin) < 0.05) ball.spin = 0;
+  }
+}
+
 function keepBallInBounds(ball: GameObject, game: GameId) {
-  const restitution = game === "haxball" ? 0.72 : 0.92;
-  if (ball.y < -HALF_HEIGHT + 11) {
-    ball.y = -HALF_HEIGHT + 11;
+  const restitution = FIELD_RESTITUTION[game];
+  const netRestitution = NET_RESTITUTION[game];
+  if (ball.y < -HALF_HEIGHT + BALL_RADIUS) {
+    ball.y = -HALF_HEIGHT + BALL_RADIUS;
     ball.vy = Math.abs(ball.vy) * restitution;
-  } else if (ball.y > HALF_HEIGHT - 11) {
-    ball.y = HALF_HEIGHT - 11;
+  } else if (ball.y > HALF_HEIGHT - BALL_RADIUS) {
+    ball.y = HALF_HEIGHT - BALL_RADIUS;
     ball.vy = -Math.abs(ball.vy) * restitution;
   }
-  const goalClearance = (game === "haxball" ? 85 : 62) - 11;
+  const goalClearance = GOAL_HALF[game] - BALL_RADIUS;
   if (Math.abs(ball.y) >= goalClearance) {
-    if (ball.x < -HALF_WIDTH + 11) {
-      ball.x = -HALF_WIDTH + 11;
+    if (ball.x < -HALF_WIDTH + BALL_RADIUS) {
+      ball.x = -HALF_WIDTH + BALL_RADIUS;
       ball.vx = Math.abs(ball.vx) * restitution;
-    } else if (ball.x > HALF_WIDTH - 11) {
-      ball.x = HALF_WIDTH - 11;
+    } else if (ball.x > HALF_WIDTH - BALL_RADIUS) {
+      ball.x = HALF_WIDTH - BALL_RADIUS;
       ball.vx = -Math.abs(ball.vx) * restitution;
     }
   } else {
     // Fundo da rede. Quem não é o host só congela quando o snapshot do host
     // traz o gelo do gol (até ~80 ms depois), então sem este limite a bola
     // atravessaria o gol e sairia de campo nesse intervalo.
-    const back = HALF_WIDTH + GOAL_DEPTH[game] - 11;
+    const back = HALF_WIDTH + GOAL_DEPTH[game] - BALL_RADIUS;
     if (ball.x > back) {
       ball.x = back;
-      ball.vx = -Math.abs(ball.vx) * restitution;
+      // Rebote morto + atrito tangencial do pano: a bola cai no fundo.
+      ball.vx = -Math.abs(ball.vx) * netRestitution;
+      ball.vy *= 0.55;
+      if (ball.spin) ball.spin *= 0.4;
     } else if (ball.x < -back) {
       ball.x = -back;
-      ball.vx = Math.abs(ball.vx) * restitution;
+      ball.vx = Math.abs(ball.vx) * netRestitution;
+      ball.vy *= 0.55;
+      if (ball.spin) ball.spin *= 0.4;
     }
   }
 }
@@ -259,16 +308,19 @@ function keepPlayerInBounds(player: GameActor, game: GameId) {
       : clamp(player.x, radius + 4, HALF_WIDTH - radius);
   } else {
     player.x = clamp(player.x, -HALF_WIDTH - margin + radius, HALF_WIDTH + margin - radius);
-    for (const segment of HAXBALL_NET_WALLS) collideCircleSegment(player, radius, segment, 0.25);
+    for (let i = 0; i < HAXBALL_NET_WALLS.length; i++) collideCircleSegment(player, radius, HAXBALL_NET_WALLS[i], 0.25);
   }
 }
 
 function steer(player: GameActor, input: GameInput, dt: number, game: GameId) {
-  const length = Math.hypot(input.x, input.y) || 1;
+  const ix = input.x;
+  const iy = input.y;
+  const hasInput = ix !== 0 || iy !== 0;
+  const length = hasInput ? Math.sqrt(ix * ix + iy * iy) : 1;
   let sprinting = false;
-  player.dashCooldown = Math.max(0, (player.dashCooldown ?? 0) - dt);
+  player.dashCooldown = Math.max(0, player.dashCooldown - dt);
   if (game === "haxball" && !player.bot) {
-    sprinting = input.sprint && (input.x !== 0 || input.y !== 0) && !player.sprintLock && player.stamina > 0;
+    sprinting = input.sprint && hasInput && !player.sprintLock && player.stamina > 0;
     if (sprinting) {
       player.stamina = Math.max(0, player.stamina - 32 * dt);
       player.sprintRest = 0;
@@ -279,10 +331,12 @@ function steer(player: GameActor, input: GameInput, dt: number, game: GameId) {
       if (player.stamina >= 25) player.sprintLock = false;
     }
     if (input.charging) {
-      const aimLength = Math.hypot(input.aimX - player.x, input.aimY - player.y);
+      const dx = input.aimX - player.x;
+      const dy = input.aimY - player.y;
+      const aimLength = Math.sqrt(dx * dx + dy * dy);
       if (aimLength > 1) {
-        player.facingX = (input.aimX - player.x) / aimLength;
-        player.facingY = (input.aimY - player.y) / aimLength;
+        player.facingX = dx / aimLength;
+        player.facingY = dy / aimLength;
       }
       player.aimX = input.aimX;
       player.aimY = input.aimY;
@@ -292,41 +346,44 @@ function steer(player: GameActor, input: GameInput, dt: number, game: GameId) {
       player.charge = 0;
       player.curve = false;
     }
-    if (input.dashSeq > (player.lastDashSeq ?? 0)) {
+    if (input.dashSeq > player.lastDashSeq) {
       player.lastDashSeq = input.dashSeq;
-      const aimLength = Math.hypot(input.aimX - player.x, input.aimY - player.y);
+      const dx = input.aimX - player.x;
+      const dy = input.aimY - player.y;
+      const aimLength = Math.sqrt(dx * dx + dy * dy);
       if (player.stamina >= 28 && player.dashCooldown === 0 && aimLength > 3) {
         player.stamina -= 28;
         player.sprintRest = 0;
         player.dashCooldown = 1.2;
         player.dashRemaining = 0.13;
-        player.dashX = (input.aimX - player.x) / aimLength;
-        player.dashY = (input.aimY - player.y) / aimLength;
+        player.dashX = dx / aimLength;
+        player.dashY = dy / aimLength;
         if (player.stamina === 0) player.sprintLock = true;
       }
     }
   }
-  const dashing = game === "haxball" && (player.dashRemaining ?? 0) > 0;
+  const dashing = game === "haxball" && player.dashRemaining > 0;
   const max = game === "haxball" ? (dashing ? 350 : player.bot ? 150 : sprinting ? 205 : 150) : 260;
   if (dashing) {
     player.vx = player.dashX * max;
     player.vy = player.dashY * max;
     player.dashRemaining = Math.max(0, player.dashRemaining - dt);
   } else {
-    const reversing = input.x * player.vx + input.y * player.vy < -1;
+    const reversing = ix * player.vx + iy * player.vy < -1;
     const acceleration = game === "haxball" ? (reversing ? 1850 : 1350) : 2200;
-    player.vx += (input.x / length) * acceleration * dt;
-    player.vy += (input.y / length) * acceleration * dt;
-    if (!input.x && !input.y) {
+    player.vx += (ix / length) * acceleration * dt;
+    player.vy += (iy / length) * acceleration * dt;
+    if (!hasInput) {
       const drag = Math.max(0, 1 - (game === "haxball" ? 12 : 28) * dt);
       player.vx *= drag;
       player.vy *= drag;
     }
   }
-  const speed = Math.hypot(player.vx, player.vy);
-  if (speed > max) {
-    player.vx *= max / speed;
-    player.vy *= max / speed;
+  const speedSq = player.vx * player.vx + player.vy * player.vy;
+  if (speedSq > max * max) {
+    const scale = max / Math.sqrt(speedSq);
+    player.vx *= scale;
+    player.vy *= scale;
   }
   player.x += player.vx * dt;
   player.y += player.vy * dt;
@@ -359,11 +416,13 @@ function botInput(player: GameActor, state: GameSnapshot): GameInput {
   const sameTeam = state.players.filter((other) => other.team === player.team);
   const rank = sameTeam.indexOf(player);
   const targetY = ball.y + (rank % 2 === 0 ? -1 : 1) * Math.floor(rank / 2) * 48;
-  const distance = Math.hypot(targetX - player.x, targetY - player.y);
+  const dx = targetX - player.x;
+  const dy = targetY - player.y;
+  const distanceSq = dx * dx + dy * dy;
   return {
     ...emptyInput,
-    x: distance > 8 ? clamp((targetX - player.x) / 80, -1, 1) : 0,
-    y: distance > 8 ? clamp((targetY - player.y) / 80, -1, 1) : 0,
+    x: distanceSq > 64 ? clamp(dx / 80, -1, 1) : 0,
+    y: distanceSq > 64 ? clamp(dy / 80, -1, 1) : 0,
     aimX: player.team === "blue" ? HALF_WIDTH : -HALF_WIDTH,
     aimY: clamp(ball.y * 0.2 + Math.sin(state.elapsed * 2.1 + player.x * 0.03) * 34, -65, 65),
     power: botShotPower(player, state),
@@ -386,11 +445,11 @@ function reflectedPuckY(y: number) {
 export function resolveKickDirection(player: Pick<GameActor, "x" | "y">, ball: Pick<GameObject, "x" | "y">, aimX: number, aimY: number) {
   const toBallX = ball.x - player.x;
   const toBallY = ball.y - player.y;
-  const ballDistance = Math.hypot(toBallX, toBallY);
+  const ballDistanceSq = toBallX * toBallX + toBallY * toBallY;
   const dx = aimX - player.x;
   const dy = aimY - player.y;
-  const aimDistance = Math.hypot(dx, dy);
-  if (ballDistance < 1 || aimDistance < 1) return null;
+  const aimDistanceSq = dx * dx + dy * dy;
+  if (ballDistanceSq < 1 || aimDistanceSq < 1) return null;
   const ballAngle = Math.atan2(toBallY, toBallX);
   const aimAngle = Math.atan2(dy, dx);
   const difference = Math.atan2(Math.sin(aimAngle - ballAngle), Math.cos(aimAngle - ballAngle));
@@ -402,17 +461,20 @@ export function resolveKickDirection(player: Pick<GameActor, "x" | "y">, ball: P
 function collideCircles(a: GameObject, b: GameObject, radiusA: number, radiusB: number, massA: number, massB: number, restitution: number, ballBoost = false) {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
-  const distance = Math.hypot(dx, dy);
   const minimum = radiusA + radiusB;
-  if (distance >= minimum) return;
+  const distSq = dx * dx + dy * dy;
+  if (distSq >= minimum * minimum) return;
+  const distance = Math.sqrt(distSq);
   const nx = distance > 0.001 ? dx / distance : 1;
   const ny = distance > 0.001 ? dy / distance : 0;
   const overlap = minimum - distance;
   const total = massA + massB;
-  a.x -= nx * overlap * (massB / total);
-  a.y -= ny * overlap * (massB / total);
-  b.x += nx * overlap * (massA / total);
-  b.y += ny * overlap * (massA / total);
+  const shareA = massB / total;
+  const shareB = massA / total;
+  a.x -= nx * overlap * shareA;
+  a.y -= ny * overlap * shareA;
+  b.x += nx * overlap * shareB;
+  b.y += ny * overlap * shareB;
   const relative = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
   if (relative >= 0) return;
   const impulse = -(1 + restitution) * relative / (1 / massA + 1 / massB);
@@ -429,7 +491,9 @@ function collideCircles(a: GameObject, b: GameObject, radiusA: number, radiusB: 
 function kick(state: GameSnapshot, player: GameActor, input: GameInput) {
   if (player.cooldown > 0 || state.freeze > 0) return;
   const ball = state.ball;
-  if (Math.hypot(ball.x - player.x, ball.y - player.y) > 16 + 11 + 14) return;
+  const dx = ball.x - player.x;
+  const dy = ball.y - player.y;
+  if (dx * dx + dy * dy > 41 * 41) return;
   const direction = resolveKickDirection(player, ball, input.aimX, input.aimY);
   if (!direction) return;
   const speed = 680 * (0.35 + 0.65 * clamp(input.power, 0, 1));
@@ -465,15 +529,39 @@ export function stepGame(
     return;
   }
   state.elapsed += delta;
+  const isHaxball = state.game === "haxball";
+  const bounds = FIELD_BOUNDS[state.game];
+  const nets = NET_WALLS[state.game];
+  const fieldRest = FIELD_RESTITUTION[state.game];
+  const netRest = NET_RESTITUTION[state.game];
+  const goalHalf = GOAL_HALF[state.game];
+  const friction = isHaxball ? 0.7 : 0.45;
+  const stopSq = isHaxball ? 64 : 36;
+  const max = isHaxball ? 1000 : 1050;
+  const playerRadius = isHaxball ? 16 : 24;
+  const playerMass = isHaxball ? 3 : 6;
+  const playerRest = isHaxball ? 0.6 : 0.95;
+
+  // Amostra os inputs uma vez por tick (não por substep): corta ~3x o custo da
+  // IA e o lixo de objetos sem mudar o comportamento em 16 ms.
+  const tickInputs: Record<string, GameInput> = {};
+  for (let i = 0; i < state.players.length; i++) {
+    const player = state.players[i];
+    tickInputs[player.id] = player.bot ? botInput(player, state) : (inputs[player.id] ?? emptyInput);
+  }
+
   const steps = 3;
   for (let step = 0; step < steps; step++) {
     const sub = delta / steps;
-    for (const player of state.players) {
-      const input = player.bot ? botInput(player, state) : (inputs[player.id] ?? emptyInput);
+    for (let i = 0; i < state.players.length; i++) {
+      const player = state.players[i];
+      const input = tickInputs[player.id];
       steer(player, input, sub, state.game);
-      if (state.game === "haxball") {
-        if (player.bot && Math.hypot(state.ball.x - player.x, state.ball.y - player.y) < 48) kick(state, player, input);
-        if (!player.bot && input.kickSeq > (lastKicks[player.id] ?? 0)) {
+      if (isHaxball) {
+        const nearSq = (state.ball.x - player.x) * (state.ball.x - player.x) + (state.ball.y - player.y) * (state.ball.y - player.y);
+        if (player.bot) {
+          if (nearSq < 48 * 48) kick(state, player, input);
+        } else if (input.kickSeq > (lastKicks[player.id] ?? 0)) {
           lastKicks[player.id] = input.kickSeq;
           kick(state, player, input);
         }
@@ -481,47 +569,55 @@ export function stepGame(
     }
 
     const ball = state.ball;
-    const friction = state.game === "haxball" ? 0.7 : 0.45;
-    ball.vx *= Math.max(0, 1 - friction * sub);
-    ball.vy *= Math.max(0, 1 - friction * sub);
-    if (state.game === "haxball" && ball.spin) {
-      const ballSpeed = Math.hypot(ball.vx, ball.vy);
-      if (ballSpeed > 20) {
-        ball.vx += (-ball.vy / ballSpeed) * ball.spin * 42 * sub;
-        ball.vy += (ball.vx / ballSpeed) * ball.spin * 42 * sub;
+    const dragKeep = Math.max(0, 1 - friction * sub);
+    ball.vx *= dragKeep;
+    ball.vy *= dragKeep;
+    if (isHaxball && ball.spin) {
+      const speedSq = ball.vx * ball.vx + ball.vy * ball.vy;
+      if (speedSq > 400) {
+        const speed = Math.sqrt(speedSq);
+        const curve = (ball.spin * 42 * sub) / speed;
+        ball.vx += -ball.vy * curve;
+        ball.vy += ball.vx * curve;
       }
       ball.spin *= Math.max(0, 1 - 1.1 * sub);
       if (Math.abs(ball.spin) < 0.05) ball.spin = 0;
     }
-    if (Math.hypot(ball.vx, ball.vy) < (state.game === "haxball" ? 8 : 6)) { ball.vx = 0; ball.vy = 0; }
+    applyNetDrag(ball, state.game, sub);
+    if (ball.vx * ball.vx + ball.vy * ball.vy < stopSq) { ball.vx = 0; ball.vy = 0; }
     ball.x += ball.vx * sub;
     ball.y += ball.vy * sub;
-    if (state.game === "haxball") ball.rotation = (ball.rotation ?? 0) + ((ball.vx * 0.25 + ball.vy * 0.2) / 11 + (ball.spin ?? 0) * 1.5) * sub;
-    const max = state.game === "haxball" ? 1000 : 1050;
-    for (const segment of FIELD_WALLS[state.game]) collideCircleSegment(ball, 11, segment, state.game === "haxball" ? 0.72 : 0.92);
+    if (isHaxball) ball.rotation = (ball.rotation ?? 0) + ((ball.vx * 0.25 + ball.vy * 0.2) / 11 + (ball.spin ?? 0) * 1.5) * sub;
+    // Contorno com rebote vivo, rede com rebote morto (tecido).
+    for (let i = 0; i < bounds.length; i++) collideCircleSegment(ball, BALL_RADIUS, bounds[i], fieldRest);
+    for (let i = 0; i < nets.length; i++) collideCircleSegment(ball, BALL_RADIUS, nets[i], netRest);
     keepBallInBounds(ball, state.game);
-    const goalHalf = state.game === "haxball" ? 85 : 62;
-    if (state.game === "haxball") {
+    if (isHaxball) {
       for (const x of [-HALF_WIDTH, HALF_WIDTH]) {
-        for (const y of [-goalHalf, goalHalf]) collidePost(ball, 11, x, y);
+        collidePost(ball, BALL_RADIUS, x, -goalHalf);
+        collidePost(ball, BALL_RADIUS, x, goalHalf);
       }
-    }
-    if (state.game === "haxball") {
       for (let first = 0; first < state.players.length; first++) {
         for (let second = first + 1; second < state.players.length; second++) {
           collideCircles(state.players[first], state.players[second], 16, 16, 3, 3, 0.4);
         }
       }
     }
-    for (const player of state.players) {
-      collideCircles(player, ball, state.game === "haxball" ? 16 : 24, 11, state.game === "haxball" ? 3 : 6, 1, state.game === "haxball" ? 0.6 : 0.95, true);
+    for (let i = 0; i < state.players.length; i++) {
+      const player = state.players[i];
+      collideCircles(player, ball, playerRadius, BALL_RADIUS, playerMass, 1, playerRest, true);
       keepPlayerInBounds(player, state.game);
     }
-    for (const segment of FIELD_WALLS[state.game]) collideCircleSegment(ball, 11, segment, state.game === "haxball" ? 0.72 : 0.92);
+    for (let i = 0; i < bounds.length; i++) collideCircleSegment(ball, BALL_RADIUS, bounds[i], fieldRest);
+    for (let i = 0; i < nets.length; i++) collideCircleSegment(ball, BALL_RADIUS, nets[i], netRest);
     keepBallInBounds(ball, state.game);
-    const ballSpeed = Math.hypot(ball.vx, ball.vy);
-    if (ballSpeed > max) { ball.vx *= max / ballSpeed; ball.vy *= max / ballSpeed; }
-    const goalThreshold = HALF_WIDTH + (state.game === "haxball" ? 11 : 4);
+    const ballSpeedSq = ball.vx * ball.vx + ball.vy * ball.vy;
+    if (ballSpeedSq > max * max) {
+      const scale = max / Math.sqrt(ballSpeedSq);
+      ball.vx *= scale;
+      ball.vy *= scale;
+    }
+    const goalThreshold = HALF_WIDTH + (isHaxball ? 11 : 4);
     if (ball.x < -goalThreshold && Math.abs(ball.y) < goalHalf - 11) {
       if (authoritative) scoreGoal(state, "orange");
       break;
@@ -592,7 +688,7 @@ export function reconcileAuthoritativeState(
     if (!authoritative) continue;
     const dx = authoritative.x - actor.x;
     const dy = authoritative.y - actor.y;
-    const distance = Math.hypot(dx, dy);
+    const distance = Math.sqrt(dx * dx + dy * dy);
     if (distance > SNAP_DISTANCE) {
       // Reset de posições ou teleporte: adota tudo, menos `lastDashSeq`, que só
       // pode avançar (voltar para trás reativaria um dash já consumido).
@@ -638,75 +734,304 @@ export function reconcileAuthoritativeState(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Renderização dos campos
+// ---------------------------------------------------------------------------
+
+function netBulge(ball: GameObject, side: -1 | 1): number {
+  if (Math.sign(ball.x) !== side || Math.abs(ball.x) <= HALF_WIDTH) return 0;
+  const depth = GOAL_DEPTH.haxball;
+  return clamp((Math.abs(ball.x) - HALF_WIDTH) / depth, 0, 1) * 14;
+}
+
+function drawNetMesh(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  bulge: number,
+  flip: boolean,
+) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.fillStyle = "rgba(255,255,255,0.10)";
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = "rgba(255,255,255,0.38)";
+  ctx.lineWidth = 1;
+  const step = 9;
+  ctx.beginPath();
+  for (let gx = x; gx <= x + w + 0.5; gx += step) {
+    const sag = bulge * Math.sin(((gx - x) / w) * Math.PI) * (flip ? -1 : 1);
+    ctx.moveTo(gx + sag, y);
+    ctx.lineTo(gx + sag, y + h);
+  }
+  for (let gy = y; gy <= y + h + 0.5; gy += step) {
+    ctx.moveTo(x, gy);
+    ctx.lineTo(x + w, gy);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawHaxballPitch(ctx: CanvasRenderingContext2D, ball: GameObject) {
+  // Entorno escuro + gramado com listras de corte (mow stripes).
+  ctx.fillStyle = "#0d1a0f";
+  ctx.fillRect(-HALF_WIDTH - 130, -HALF_HEIGHT - 130, FIELD_WIDTH + 260, FIELD_HEIGHT + 260);
+  const stripes = 10;
+  const stripeW = FIELD_WIDTH / stripes;
+  for (let i = 0; i < stripes; i++) {
+    ctx.fillStyle = i % 2 === 0 ? "#2f9e44" : "#2a9140";
+    ctx.fillRect(-HALF_WIDTH + i * stripeW, -HALF_HEIGHT, stripeW + 0.5, FIELD_HEIGHT);
+  }
+  // Brilho sutil de cima para dar volume sem tirar o fosco do gramado.
+  const sheen = ctx.createLinearGradient(0, -HALF_HEIGHT, 0, HALF_HEIGHT);
+  sheen.addColorStop(0, "rgba(255,255,255,0.06)");
+  sheen.addColorStop(0.5, "rgba(255,255,255,0)");
+  sheen.addColorStop(1, "rgba(0,0,0,0.10)");
+  ctx.fillStyle = sheen;
+  ctx.fillRect(-HALF_WIDTH, -HALF_HEIGHT, FIELD_WIDTH, FIELD_HEIGHT);
+
+  // Marcações brancas oficiais: contorno, meio-campo, círculo central, áreas.
+  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.lineWidth = 4;
+  ctx.strokeRect(-HALF_WIDTH, -HALF_HEIGHT, FIELD_WIDTH, FIELD_HEIGHT);
+  ctx.beginPath();
+  ctx.moveTo(0, -HALF_HEIGHT);
+  ctx.lineTo(0, HALF_HEIGHT);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, 0, 75, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(0, 0, 5, 0, Math.PI * 2);
+  ctx.fill();
+  // Áreas: grande (140 x 320) e pequena (55 x 190) + marcas de pênalti + arcos.
+  for (const side of [-1, 1] as const) {
+    const gx = side * HALF_WIDTH;
+    const bigX = side < 0 ? gx : gx - 140;
+    const smallX = side < 0 ? gx : gx - 55;
+    ctx.lineWidth = 3.5;
+    ctx.strokeRect(bigX, -160, 140, 320);
+    ctx.strokeRect(smallX, -95, 55, 190);
+    ctx.beginPath();
+    ctx.arc(side * (HALF_WIDTH - 105), 0, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(side * (HALF_WIDTH - 105), 0, 52, side < 0 ? -0.9 : Math.PI - 0.9, side < 0 ? 0.9 : Math.PI + 0.9);
+    ctx.stroke();
+  }
+  // Cantos.
+  ctx.lineWidth = 3;
+  for (const sx of [-1, 1]) {
+    for (const sy of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(sx * HALF_WIDTH, sy * HALF_HEIGHT, 14, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  // Gols com rede quadriculada + barriga quando a bola encosta no pano.
+  const goalHalf = GOAL_HALF.haxball;
+  const depth = GOAL_DEPTH.haxball;
+  const leftBulge = netBulge(ball, -1);
+  const rightBulge = netBulge(ball, 1);
+  drawNetMesh(ctx, -HALF_WIDTH - depth - leftBulge, -goalHalf, depth + leftBulge, goalHalf * 2, leftBulge, true);
+  drawNetMesh(ctx, HALF_WIDTH, -goalHalf, depth + rightBulge, goalHalf * 2, rightBulge, false);
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(-HALF_WIDTH - depth - leftBulge, -goalHalf, depth + leftBulge, goalHalf * 2);
+  ctx.strokeRect(HALF_WIDTH, -goalHalf, depth + rightBulge, goalHalf * 2);
+
+  // Traves e travessões internos.
+  for (const x of [-HALF_WIDTH, HALF_WIDTH]) {
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(x, -goalHalf);
+    ctx.lineTo(x, goalHalf);
+    ctx.stroke();
+    for (const y of [-goalHalf, goalHalf]) {
+      ctx.fillStyle = "#ffffff";
+      ctx.beginPath();
+      ctx.arc(x, y, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#14532d";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+}
+
+function drawHockeyRink(ctx: CanvasRenderingContext2D) {
+  const RED = "#c8102e";
+  const BLUE = "#0b3d91";
+  const BLACK = "#111111";
+  const ICE = "#edf0f2";
+  // Gelo fosco: chapado, sem gradiente brilhante.
+  ctx.fillStyle = "#101418";
+  ctx.fillRect(-HALF_WIDTH - 90, -HALF_HEIGHT - 90, FIELD_WIDTH + 180, FIELD_HEIGHT + 180);
+  ctx.fillStyle = ICE;
+  ctx.fillRect(-HALF_WIDTH, -HALF_HEIGHT, FIELD_WIDTH, FIELD_HEIGHT);
+  // Reflexo quase imperceptível do gelo (mantém o fosco).
+  ctx.fillStyle = "rgba(255,255,255,0.25)";
+  ctx.fillRect(-HALF_WIDTH, -HALF_HEIGHT, FIELD_WIDTH, 26);
+
+  // Tabelas: contorno preto + rodapé amarelo (kickplate).
+  ctx.strokeStyle = BLACK;
+  ctx.lineWidth = 10;
+  ctx.strokeRect(-HALF_WIDTH, -HALF_HEIGHT, FIELD_WIDTH, FIELD_HEIGHT);
+  ctx.strokeStyle = "#e8b921";
+  ctx.lineWidth = 5;
+  ctx.strokeRect(-HALF_WIDTH + 8, -HALF_HEIGHT + 8, FIELD_WIDTH - 16, FIELD_HEIGHT - 16);
+
+  // Linha central vermelha + círculo central azul.
+  ctx.fillStyle = RED;
+  ctx.fillRect(-6, -HALF_HEIGHT, 12, FIELD_HEIGHT);
+  ctx.strokeStyle = BLUE;
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(0, 0, 70, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = BLUE;
+  ctx.beginPath();
+  ctx.arc(0, 0, 7, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Linhas azuis das zonas.
+  ctx.fillStyle = BLUE;
+  for (const x of [-160, 160]) ctx.fillRect(x - 8, -HALF_HEIGHT, 16, FIELD_HEIGHT);
+
+  // Linhas de gol vermelhas + creases azuis claros.
+  ctx.fillStyle = RED;
+  for (const x of [-440, 440]) ctx.fillRect(x - 2, -HALF_HEIGHT, 4, FIELD_HEIGHT);
+  for (const side of [-1, 1] as const) {
+    const gx = side * HALF_WIDTH;
+    const cx = side * (HALF_WIDTH - 22);
+    ctx.fillStyle = "rgba(120,180,230,0.85)";
+    ctx.beginPath();
+    ctx.arc(cx, 0, 46, side < 0 ? -Math.PI / 2 : Math.PI / 2, side < 0 ? Math.PI / 2 : Math.PI * 1.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = RED;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    void gx;
+  }
+
+  // Círculos de faceoff: vermelhos com ponto central + marcas pretas de hash.
+  const spots: Array<[number, number]> = [[-300, -160], [-300, 160], [300, -160], [300, 160]];
+  for (const [fx, fy] of spots) {
+    ctx.strokeStyle = RED;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(fx, fy, 56, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = RED;
+    ctx.beginPath();
+    ctx.arc(fx, fy, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = BLACK;
+    ctx.lineWidth = 3;
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(fx + s * 78, fy - 22);
+      ctx.lineTo(fx + s * 92, fy - 22);
+      ctx.moveTo(fx + s * 78, fy + 22);
+      ctx.lineTo(fx + s * 92, fy + 22);
+      ctx.stroke();
+    }
+  }
+  // Pontos de faceoff da zona neutra.
+  ctx.fillStyle = RED;
+  for (const [fx, fy] of [[-90, -160], [-90, 160], [90, -160], [90, 160]] as Array<[number, number]>) {
+    ctx.beginPath();
+    ctx.arc(fx, fy, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Redes do hóquei: armação vermelha + malha branca.
+  const goalHalf = GOAL_HALF.hoquei;
+  const depth = GOAL_DEPTH.hoquei;
+  for (const side of [-1, 1] as const) {
+    const x = side < 0 ? -HALF_WIDTH - depth : HALF_WIDTH;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, -goalHalf, depth, goalHalf * 2);
+    ctx.clip();
+    ctx.fillStyle = "rgba(255,255,255,0.75)";
+    ctx.fillRect(x, -goalHalf, depth, goalHalf * 2);
+    ctx.strokeStyle = "rgba(120,130,140,0.5)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let gx = x; gx <= x + depth; gx += 8) {
+      ctx.moveTo(gx, -goalHalf);
+      ctx.lineTo(gx, goalHalf);
+    }
+    for (let gy = -goalHalf; gy <= goalHalf; gy += 8) {
+      ctx.moveTo(x, gy);
+      ctx.lineTo(x + depth, gy);
+    }
+    ctx.stroke();
+    ctx.restore();
+    ctx.strokeStyle = RED;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(x, -goalHalf, depth, goalHalf * 2);
+    ctx.fillStyle = RED;
+    for (const y of [-goalHalf, goalHalf]) {
+      ctx.beginPath();
+      ctx.arc(side * HALF_WIDTH, y, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
 export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, localPlayerId: string) {
   const { width, height } = ctx.canvas;
   const scale = Math.min(width / 1160, height / VIEW_HEIGHT);
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#090909";
+  ctx.fillStyle = state.game === "haxball" ? "#0d1a0f" : "#101418";
   ctx.fillRect(0, 0, width, height);
   ctx.save();
   ctx.translate(width / 2, height / 2);
   ctx.scale(scale, scale);
 
-  const field = ctx.createLinearGradient(-500, -280, 500, 280);
-  field.addColorStop(0, "#11100f");
-  field.addColorStop(0.5, "#1c1713");
-  field.addColorStop(1, "#11100f");
-  ctx.fillStyle = field;
-  ctx.fillRect(-HALF_WIDTH, -HALF_HEIGHT, FIELD_WIDTH, FIELD_HEIGHT);
-  ctx.strokeStyle = "rgba(255,253,249,.6)";
-  ctx.lineWidth = 3;
-  ctx.strokeRect(-HALF_WIDTH, -HALF_HEIGHT, FIELD_WIDTH, FIELD_HEIGHT);
-  ctx.beginPath(); ctx.moveTo(0, -HALF_HEIGHT); ctx.lineTo(0, HALF_HEIGHT); ctx.stroke();
-  ctx.beginPath(); ctx.arc(0, 0, state.game === "haxball" ? 75 : 65, 0, Math.PI * 2); ctx.stroke();
-  ctx.fillStyle = "#ff8d4f";
-  ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI * 2); ctx.fill();
-
-  const goalHalf = state.game === "haxball" ? 85 : 62;
-  const goalDepth = GOAL_DEPTH[state.game];
-  ctx.fillStyle = "rgba(255,253,249,.12)";
-  ctx.fillRect(-HALF_WIDTH - goalDepth, -goalHalf, goalDepth, goalHalf * 2);
-  ctx.fillStyle = "rgba(255,141,79,.16)";
-  ctx.fillRect(HALF_WIDTH, -goalHalf, goalDepth, goalHalf * 2);
-  ctx.strokeStyle = "#fffdf9"; ctx.strokeRect(-HALF_WIDTH - goalDepth, -goalHalf, goalDepth, goalHalf * 2);
-  ctx.strokeRect(HALF_WIDTH, -goalHalf, goalDepth, goalHalf * 2);
-
-  if (state.game === "haxball") {
-    for (const x of [-HALF_WIDTH, HALF_WIDTH]) {
-      ctx.strokeStyle = "#fffdf9"; ctx.lineWidth = 4;
-      ctx.beginPath(); ctx.moveTo(x, -goalHalf); ctx.lineTo(x, goalHalf); ctx.stroke();
-      for (const y of [-goalHalf, goalHalf]) {
-        ctx.fillStyle = "#fffdf9";
-        ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = "#171717"; ctx.lineWidth = 1.5; ctx.stroke();
-      }
-    }
-  }
+  if (state.game === "haxball") drawHaxballPitch(ctx, state.ball);
+  else drawHockeyRink(ctx);
 
   if (state.game === "haxball") {
     for (const player of state.players) {
       if (!player.bot && player.charge > 0) {
-        const direction = Math.hypot(player.aimX - player.x, player.aimY - player.y) || 1;
-        const closeToBall = Math.hypot(state.ball.x - player.x, state.ball.y - player.y) <= 41;
+        const dx = player.aimX - player.x;
+        const dy = player.aimY - player.y;
+        const direction = Math.sqrt(dx * dx + dy * dy) || 1;
+        const bdx = state.ball.x - player.x;
+        const bdy = state.ball.y - player.y;
+        const closeToBall = bdx * bdx + bdy * bdy <= 41 * 41;
         const legal = closeToBall ? resolveKickDirection(player, state.ball, player.aimX, player.aimY) : null;
         if (closeToBall && !legal) continue;
-        const ux = legal?.x ?? (player.aimX - player.x) / direction;
-        const uy = legal?.y ?? (player.aimY - player.y) / direction;
+        const ux = legal?.x ?? dx / direction;
+        const uy = legal?.y ?? dy / direction;
         let px = closeToBall ? state.ball.x : player.x + ux * 28;
         let py = closeToBall ? state.ball.y : player.y + uy * 28;
         let vx = ux * 680 * (0.35 + 0.65 * player.charge);
         let vy = uy * 680 * (0.35 + 0.65 * player.charge);
         let spin = player.curve ? 8 : 0;
         ctx.save();
-        ctx.strokeStyle = player.team === "blue" ? "#ff8d4f" : "#fffdf9";
+        ctx.strokeStyle = player.team === "blue" ? "#ffd166" : "#ffffff";
         ctx.lineWidth = 2.5;
         ctx.setLineDash([8, 6]);
         ctx.beginPath(); ctx.moveTo(px, py);
         for (let point = 0; point < 24; point++) {
-          const speed = Math.hypot(vx, vy);
-          if (spin && speed > 20) {
-            vx += (-vy / speed) * spin * 42 / 60;
-            vy += (vx / speed) * spin * 42 / 60;
+          const speedSq = vx * vx + vy * vy;
+          if (spin && speedSq > 400) {
+            const speed = Math.sqrt(speedSq);
+            const curve = (spin * 42) / 60 / speed;
+            vx += -vy * curve;
+            vy += vx * curve;
             spin *= 1 - 1.1 / 60;
           }
           vx *= 1 - 0.7 / 60;
@@ -729,12 +1054,13 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
     }
   }
 
+  const onIce = state.game === "hoquei";
   for (const player of state.players) {
-    const radius = state.game === "haxball" ? 16 : 24;
+    const radius = onIce ? 24 : 16;
     ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2);
     ctx.fillStyle = player.team === "blue" ? "#fffdf9" : "#ff8d4f"; ctx.fill();
     ctx.lineWidth = player.id === localPlayerId ? 4 : 2;
-    ctx.strokeStyle = player.id === localPlayerId ? "#ff8d4f" : "#050505"; ctx.stroke();
+    ctx.strokeStyle = player.id === localPlayerId ? (onIce ? "#0b3d91" : "#ffd166") : "#050505"; ctx.stroke();
     ctx.fillStyle = player.team === "blue" ? "#050505" : "#120c08";
     ctx.font = "bold 10px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(player.bot ? "B" : "P", player.x, player.y + 1);
@@ -744,11 +1070,12 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
       ctx.fillRect(player.x - barWidth / 2 - 2, player.y - radius - 31, barWidth + 4, 7);
       ctx.fillStyle = "#514038";
       ctx.fillRect(player.x - barWidth / 2, player.y - radius - 29, barWidth, 3);
-      ctx.fillStyle = player.stamina < 25 ? "#fffdf9" : "#ff8d4f";
+      ctx.fillStyle = player.stamina < 25 ? "#fffdf9" : "#ffd166";
       ctx.fillRect(player.x - barWidth / 2, player.y - radius - 29, barWidth * clamp(player.stamina / 100, 0, 1), 3);
     }
-    ctx.fillStyle = "#fffdf9"; ctx.font = "10px monospace";
-    ctx.fillText(player.name.slice(0, 12), player.x, player.y - radius - (state.game === "haxball" ? 41 : 13));
+    ctx.fillStyle = onIce ? "#111111" : "#ffffff";
+    ctx.font = "10px monospace";
+    ctx.fillText(player.name.slice(0, 12), player.x, player.y - radius - (onIce ? 13 : 41));
   }
 
   ctx.save();

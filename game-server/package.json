@@ -1,0 +1,21 @@
+{
+  "name": "portfolio-games-udp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servidor UDP (geckos.io) + salas em Redis para Haxball e Hóquei. Deploy no Render.",
+  "type": "module",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@geckos.io/server": "^3.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "ioredis": "^5.4.1"
+  }
+}

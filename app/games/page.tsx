@@ -3,6 +3,7 @@ import { ArrowUpRight, Disc3, Goal } from "lucide-react";
 import Link from "next/link";
 import { Footer } from "@/components/footer";
 import { Header } from "@/components/header";
+import { WakeGameServer } from "@/components/wake-game-server";
 
 export const metadata: Metadata = {
   title: "Games | Pedro Nunes",
@@ -17,6 +18,7 @@ const games = [
 export default function GamesPage() {
   return (
     <>
+      <WakeGameServer />
       <Header />
       <main className="games-page shell">
         <div className="games-intro">

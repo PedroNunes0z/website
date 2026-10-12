@@ -19,6 +19,7 @@
     "node": ">=20.9.0"
   },
   "dependencies": {
+    "@geckos.io/client": "^3.1.0",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.4.0",
     "@upstash/redis": "^1.35.6",
@@ -28,6 +29,7 @@
     "jose": "^6.1.2",
     "lucide-react": "^0.468.0",
     "next": "16.3.4",
+    "phaser": "^3.80.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-icons": "^5.7.0",

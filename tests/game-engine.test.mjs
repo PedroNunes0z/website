@@ -198,6 +198,19 @@ test("sem autoridade o convidado não marca gol nem pausa, e a bola não escapa 
   assert.ok(state.ball.x >= -559.001, `bola em ${state.ball.x}`);
 });
 
+test("a rede amortece a bola em vez de devolvê-la ao campo", () => {
+  const state = createOnlineGame("haxball", roster);
+  state.ball.x = 540;
+  state.ball.y = 0;
+  state.ball.vx = 600;
+  state.ball.vy = 120;
+  const speedBefore = Math.hypot(state.ball.vx, state.ball.vy);
+  for (let frame = 0; frame < 30; frame++) stepGame(state, {}, {}, 1 / 60, { authoritative: false });
+  const speedAfter = Math.hypot(state.ball.vx, state.ball.vy);
+  assert.ok(speedAfter < speedBefore * 0.5, `rede não amortecedu: ${speedBefore} -> ${speedAfter}`);
+  assert.ok(state.ball.x <= 559.001, `bola em ${state.ball.x}`);
+});
+
 test("a reconciliação aproxima o estado do host sem trocá-lo de uma vez", () => {
   const local = createOnlineGame("haxball", roster);
   const target = createOnlineGame("haxball", roster);

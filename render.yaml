@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: portfolio-games-udp
+    runtime: node
+    rootDir: game-server
+    buildCommand: npm install --omit=dev
+    startCommand: node src/index.js
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "20.18.0"
+      - key: REDIS_URL
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false

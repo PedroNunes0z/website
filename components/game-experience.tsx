@@ -2,11 +2,16 @@
 
 import { ArrowLeft, ArrowRight, Copy, Maximize2, Minimize2, RefreshCcw, Users } from "lucide-react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createBotGame, createOnlineGame, drawGame, pointerToField, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameInput, type GameSnapshot } from "@/lib/game-engine";
 import type { GameId, GameRoom, GameTeam } from "@/lib/games";
 import { isVersionedEvent, REALTIME_VERSION, type RealtimeClientEvent } from "@/lib/realtime";
+import { usePhaserEngine } from "@/lib/game-server";
+import { GeckosRoomTransport } from "@/lib/geckos-room";
 import { useAblyRoom, type RealtimeStatus } from "@/lib/use-ably-room";
+
+const PhaserGame = dynamic(() => import("@/components/phaser-game").then((module) => module.PhaserGame), { ssr: false });
 
 const labels = { haxball: "Haxball", hoquei: "Hóquei" };
 const descriptions = {
@@ -50,6 +55,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const targetRef = useRef<GameSnapshot | null>(null);
   const targetRevisionRef = useRef(-1);
   const hasAuthoritativeRef = useRef(false);
+  const geckosRef = useRef<GeckosRoomTransport | null>(null);
+  const udpSnapTickRef = useRef(0);
   const keysRef = useRef<Set<string>>(new Set());
   const pointerDownAt = useRef(0);
   const lastGoalCountRef = useRef(0);
@@ -61,6 +68,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [networkError, setNetworkError] = useState("");
   const [metrics, setMetrics] = useState({ ping: 0, fps: 60 });
+  const [udpLive, setUdpLive] = useState(false);
   const pingRef = useRef(0);
   const fpsRef = useRef(60);
   const transportRef = useRef<RealtimeStatus>("idle");
@@ -379,6 +387,37 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
     else if (realtimeStatus === "fallback") console.info("[Net] Ably indisponível — sincronização por polling HTTP (mais lag).");
   }, [realtimeStatus]);
 
+  // Via rápida UDP (geckos.io/Render) para inputs/snapshots. O HTTP/Ably
+  // continua persistindo tudo no Redis — o UDP só acelera a entrega.
+  // Sem servidor configurado (ou durante o cold start), segue só no Ably/HTTP.
+  useEffect(() => {
+    if (mode !== "online" || !roomId || !playerId || !GeckosRoomTransport.available()) return;
+    const transport = new GeckosRoomTransport();
+    geckosRef.current = transport;
+    let disposed = false;
+    const timer = setInterval(() => {
+      if (!disposed) setUdpLive(transport.status === "connected");
+    }, 1000);
+    void transport.connect(roomId, playerId).then((channel) => {
+      if (disposed || !channel) return;
+      transport.onSnapshot((snapshot) => {
+        const current = roomRef.current;
+        const host = current?.ownerId === playerId;
+        if (!host && current?.status === "playing") acceptTarget(snapshot);
+      });
+      transport.onInput((id, remoteInput) => {
+        remoteInputsRef.current[id] = remoteInput;
+      });
+      setUdpLive(true);
+    });
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+      transport.close();
+      if (geckosRef.current === transport) geckosRef.current = null;
+    };
+  }, [mode, roomId, playerId, game, acceptTarget]);
+
   useEffect(() => {
     if (mode !== "online" || !roomId || !playerId) return;
     let active = true;
@@ -431,6 +470,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       const host = currentRoom?.ownerId === playerId && !!ownerToken;
       const live = transportRef.current === "connected";
       const playing = currentRoom?.status === "playing";
+      const udp = geckosRef.current;
+      const udpConnected = !!udp && udp.status === "connected";
       const stats = netStatsRef.current;
       const sentAt = Date.now();
 
@@ -446,6 +487,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
           stats.inputSends += 1;
           publishRealtime("game-input-updated", { v: REALTIME_VERSION, playerId, input: { ...inputRef.current }, sentAt });
         }
+        // Via rápida UDP (fire-and-forget): chega antes do POST/Ably quando o
+        // Render está acordado; a persistência continua no HTTP abaixo.
+        if (udpConnected) udp.sendInput(playerId, { ...inputRef.current });
       }
       if (live) {
         // Persistência lenta: sem `notify` o servidor só grava no Redis, sem
@@ -474,6 +518,12 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
           ball: { ...stateRef.current.ball },
           score: { ...stateRef.current.score },
         };
+        if (udpConnected) {
+          // Snapshot do host via UDP a ~10 Hz (tick de 50ms, um sim um não);
+          // o Ably/HTTP abaixo continua como transporte principal/persistência.
+          udpSnapTickRef.current += 1;
+          if (udpSnapTickRef.current % 2 === 0) udp.sendSnapshot(snapshotCopy);
+        }
         if (live) {
           stats.snapshotSends += 1;
           publishRealtime("game-snapshot-updated", { v: REALTIME_VERSION, playerId, snapshot: snapshotCopy, sentAt });
@@ -493,7 +543,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       if (stats.lastDiag === 0) stats.lastDiag = now;
       const diagWindow = now - stats.lastDiag;
       if (diagWindow >= 2000) {
-        const via = transportRef.current === "connected" ? "ably" : `http (${transportRef.current})`;
+        const via = udpConnected ? "udp" : transportRef.current === "connected" ? "ably" : `http (${transportRef.current})`;
         console.info(`[Net] sala=${roomId} via=${via} post=${pingRef.current}ms entrega=${deliveryRef.current}ms fps=${Math.round(fpsRef.current)} inputs=${Math.round((stats.inputSends * 1000) / diagWindow)}/s publicados=${Math.round((stats.snapshotSends * 1000) / diagWindow)}/s recebidos=${Math.round((stats.snapshots * 1000) / diagWindow)}/s atraso=${stats.driftMs}ms host=${host ? "sim" : "não"}`);
         stats.inputSends = 0;
         stats.snapshotSends = 0;
@@ -576,6 +626,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
       <div className="game-canvas-shell">
         <div className="game-net-hud" role="status" aria-label="Desempenho e conexão">
           {mode === "online" && <span className="game-net-hud-mode">{realtimeStatus === "idle" ? "Preparando sala…" : connLabels[realtimeStatus]}</span>}
+          {mode === "online" && udpLive && <span className="game-net-hud-ok"><i aria-hidden="true" />UDP ativo</span>}
           {mode === "online" && <span className={`game-net-hud-${pingTone}`}><i aria-hidden="true" />ping {metrics.ping}ms</span>}
           <span className={`game-net-hud-${fpsTone}`}><i aria-hidden="true" />fps {metrics.fps}</span>
         </div>
@@ -606,6 +657,7 @@ export function GameExperience({ game }: { game: GameId }) {
   const [ownerToken, setOwnerToken] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const phaser = usePhaserEngine();
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("room")?.toUpperCase() ?? "";
@@ -860,8 +912,9 @@ export function GameExperience({ game }: { game: GameId }) {
         </div>
       )}
 
-      {(mode === "bot" || room) && (
-        <GameCanvas
+      {(mode === "bot" || room) && (mode === "bot" && phaser
+        ? <PhaserGame key={`phaser-${game}-${bots.blue}-${bots.orange}`} game={game} bots={bots} />
+        : <GameCanvas
           key={`${game}-${mode}-${bots.blue}-${bots.orange}-${room?.id ?? "local"}`}
           game={game}
           mode={mode}
