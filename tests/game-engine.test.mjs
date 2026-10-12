@@ -271,6 +271,19 @@ test("bot perseguidor ataca o gol adversário sem fazer gol contra", () => {
   assert.equal(state.score.blue, 0);
 });
 
+test("goleiro bot segura a linha do gol em vez de passear", () => {
+  const state = createBotGame("haxball", { blue: 0, orange: 3 }, FULL_FIELD);
+  state.ball.x = 0;
+  state.ball.y = 200;
+  state.ball.vx = 0;
+  state.ball.vy = 0;
+  const goalie = state.players[3];
+  assert.ok(goalie.x < 400, `goleiro saiu em ${goalie.x}`);
+  for (let frame = 0; frame < 180; frame++) stepGame(state, {}, {}, 1 / 60);
+  assert.ok(goalie.x > 400, `goleiro em ${goalie.x}`);
+  assert.ok(Math.abs(goalie.x - 466) < 120, `goleiro longe da linha: ${goalie.x}`);
+});
+
 test("bola que sai de volta antes da espera não vale gol", () => {
   const state = createOnlineGame("haxball", roster, FULL_FIELD);
   let crossed = 0;

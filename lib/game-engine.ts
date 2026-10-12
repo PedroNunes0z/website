@@ -492,16 +492,17 @@ function botInput(player: GameActor, state: GameSnapshot): GameInput {
     const ownLo = dir > 0 ? -hw + 27 : 28;
     const ownHi = dir > 0 ? -28 : hw - 27;
     if (danger) {
-      // Guarda entre o disco e o gol, espelhando a altura prevista.
-      return driveTo(player, clamp(ball.x - dir * 38, ownLo, ownHi), clamp(predictedY, -hh + 27, hh - 27));
+      // Guarda entre o disco e o gol com reação urgente, espelhando a altura.
+      return driveTo(player, clamp(ball.x - dir * 38, ownLo, ownHi), clamp(predictedY, -hh + 27, hh - 27), 50);
     }
     // Ataque: passa para trás do disco (lado do próprio gol) e empurra para
-    // frente. A 26 do centro o contato é garantido e religa a jogada.
+    // frente pelo centro. A 26 do centro o contato é garantido e religa a
+    // jogada na direção do gol adversário.
     if (player.stall > 2) {
       const ang = state.elapsed * 3 + (hashId(player.id) % 10);
       return driveTo(player, ball.x + Math.cos(ang) * 30, clamp(ball.y + Math.sin(ang) * 30, -hh + 27, hh - 27));
     }
-    return driveTo(player, clamp(ball.x + dir * 26, ownLo, ownHi), clamp(ball.y * 0.85, -hh + 27, hh - 27));
+    return driveTo(player, clamp(ball.x + dir * 26, ownLo, ownHi), clamp(ball.y * 0.7, -hh + 27, hh - 27));
   }
   // Haxball: papéis por ordem no time (0 perseguidor, 1 apoio, 2 defesa e o
   // último de 3+ vira goleiro). A mira é sempre no gol adversário, então o
@@ -509,18 +510,23 @@ function botInput(player: GameActor, state: GameSnapshot): GameInput {
   const attackX = dir * hw;
   const myGoalX = -dir * hw;
   const sameTeam = state.players.filter((other) => other.team === player.team);
+  const foes = state.players.filter((other) => other.team !== player.team);
   const rank = sameTeam.indexOf(player);
   const last = sameTeam.length - 1;
   const lane = ((hashId(player.id) % 3) - 1) * 26;
   // Balanço de patrulha: ninguém fica congelado quando a bola para longe.
   const sway = Math.sin(state.elapsed * 1.3 + hashId(player.id) * 0.7) * 14;
-  const aimY = clamp(ball.y * 0.25 + Math.sin(state.elapsed * 2.1 + player.x * 0.03) * 30, -60, 60);
+  let aimY = clamp(ball.y * 0.25 + Math.sin(state.elapsed * 2.1 + player.x * 0.03) * 30, -60, 60);
   const power = botShotPower(player, state);
+  let gain = 80;
   let targetX: number;
   let targetY: number;
   if (last > 1 && rank === last) {
+    // Goleiro: segura a linha e antecipa o chute pela velocidade da bola.
     targetX = myGoalX + dir * 34;
-    targetY = clamp(ball.y * 0.5 + sway * 0.5, -52, 52);
+    const shotComing = ball.vx * -dir > 150 && Math.abs(ball.x - myGoalX) < 400;
+    targetY = clamp((shotComing ? ball.y + ball.vy * 0.22 : ball.y * 0.5) + sway * 0.5, -52, 52);
+    if (shotComing) gain = 55;
   } else if (rank === 0) {
     if (player.stall > 1.2) {
       // Travou colado na bola lenta: orbita até achar o cone do chute.
@@ -531,14 +537,48 @@ function botInput(player: GameActor, state: GameSnapshot): GameInput {
       targetX = ball.x - dir * 12;
       targetY = ball.y + lane * 0.3;
     }
+    // Mira no canto oposto ao lado com mais adversários perto do gol.
+    let up = 0;
+    let down = 0;
+    for (const foe of foes) {
+      if (Math.abs(foe.x - attackX) < 220) {
+        if (foe.y >= 0) up += 1;
+        else down += 1;
+      }
+    }
+    aimY = clamp(ball.y * 0.15 + (up >= down ? -58 : 58) * 0.6, -62, 62);
   } else if (rank === 1) {
+    // Apoio: abre no lado oposto ao adversário mais próximo da bola.
+    let nearestOppY = ball.y;
+    let nearestD = Infinity;
+    for (const foe of foes) {
+      const d = Math.abs(foe.x - ball.x) + Math.abs(foe.y - ball.y);
+      if (d < nearestD) {
+        nearestD = d;
+        nearestOppY = foe.y;
+      }
+    }
+    const side = nearestOppY >= ball.y ? -1 : 1;
     targetX = clamp(ball.x + dir * 150, -hw + 40, hw - 40);
-    targetY = clamp(ball.y * 0.6 + lane + sway, -hh + 40, hh - 40);
+    targetY = clamp(ball.y * 0.6 + side * 46 + sway, -hh + 40, hh - 40);
   } else {
     targetX = myGoalX + dir * (Math.abs(ball.x - myGoalX) * 0.4);
     targetY = clamp(ball.y * 0.5 + lane * 0.5 + sway, -hh + 40, hh - 40);
   }
-  const move = driveTo(player, targetX, targetY, 80, 8);
+  // Desmarque: ninguém cola no perseguidor (vale para o humano também).
+  if (rank !== 0 && !(last > 1 && rank === last)) {
+    const anchor = sameTeam[0];
+    if (anchor && anchor.id !== player.id) {
+      const adx = targetX - anchor.x;
+      const ady = targetY - anchor.y;
+      const ad = Math.hypot(adx, ady);
+      if (ad < 70 && ad > 0.01) {
+        targetX = anchor.x + (adx / ad) * 70;
+        targetY = anchor.y + (ady / ad) * 70;
+      }
+    }
+  }
+  const move = driveTo(player, targetX, targetY, gain, 8);
   return { ...move, aimX: attackX, aimY, power };
 }
 

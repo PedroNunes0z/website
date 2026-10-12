@@ -168,7 +168,6 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   const camRef = useRef({ x: 0, y: 0 });
 
   // Encerra o replay e volta ao jogo com contagem (placar já aplicado).
-  // Sem vencedor: 1, 2, 3 e JÁ antes de soltar a bola de novo.
   const finishReplay = useCallback(() => {
     if (phaseRef.current !== "replay") return;
     replayRef.current = null;
@@ -178,6 +177,31 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     phaseRef.current = "play";
     if (!stateRef.current.winner) startCountdown(600);
   }, [startCountdown]);
+
+  // Reinicia a partida contra bots do zero: placar, posições e contagem.
+  const restartMatch = useCallback(() => {
+    if (mode !== "bot") return;
+    stateRef.current = createBotGame(game, bots);
+    lastKicksRef.current = {};
+    bufferRef.current = [];
+    replayRef.current = null;
+    pendingGoalRef.current = null;
+    targetRef.current = null;
+    targetRevisionRef.current = -1;
+    hasAuthoritativeRef.current = false;
+    lastGoalCountRef.current = 0;
+    hudScoreRef.current = { blue: 0, orange: 0 };
+    goalUntilRef.current = 0;
+    matchPointRef.current = false;
+    pausedRef.current = false;
+    setPaused(false);
+    setGoalNotice(null);
+    setReplayBadge(false);
+    gameAudio.stopStomps();
+    const fresh = stateRef.current;
+    setHud({ blue: 0, orange: 0, elapsed: 0, winner: null, flags: fresh.flags });
+    startCountdown(600);
+  }, [game, mode, bots, startCountdown]);
 
   // Chute sem mira: encostou na bola (38px) + clique/Espaço = chute de
   // potência fixa na direção em que a bola está, com leve antecipação.
@@ -863,6 +887,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
       <div className="game-board-footer">
         <span>WASD ou setas: mover {game === "haxball" ? " · Clique ou Espaço: chute · Shift: correr · Q: dash na direção do movimento" : " · Empurre o disco para marcar gols"}{mode === "bot" ? " · P: pausar" : ""}</span>
         <span className="game-board-footer-right">
+          {mode === "bot" && <button type="button" onClick={restartMatch} aria-label="Reiniciar partida" title="Reiniciar partida"><RefreshCcw size={15} /> Reiniciar</button>}
           {mode === "bot" && <button type="button" onClick={togglePause} aria-label={paused ? "Continuar" : "Pausar"} title={paused ? "Continuar (P)" : "Pausar (P)"}>{paused ? <Play size={15} /> : <Pause size={15} />} {paused ? "Continuar" : "Pausar"}</button>}
           <button type="button" onClick={() => { const next = !muted; gameAudio.setMuted(next); setMuted(next); if (!next) gameAudio.ensure(); }} aria-label={muted ? "Ativar som" : "Silenciar"} title={muted ? "Ativar som" : "Silenciar"}>{muted ? <VolumeX size={15} /> : <Volume2 size={15} />} {muted ? "Mudo" : "Som"}</button>
         </span>
