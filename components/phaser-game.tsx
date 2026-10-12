@@ -5,7 +5,6 @@ import { gameAudio } from "@/lib/game-audio";
 import { CountdownOverlay, useCountdown } from "@/components/countdown-overlay";
 import {
   createBotGame,
-  flagBackground,
   FULL_FIELD,
   stepGame,
   type BotCounts,
@@ -205,10 +204,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             const r = s.game === "haxball" ? 16 : 24;
             const px = p.x + WORLD_W / 2;
             const py = p.y + WORLD_H / 2;
-            const bg = flagBackground(state.flags[p.team]);
-            const fill = bg !== null
-              ? Number.parseInt(bg.slice(1), 16)
-              : (p.team === "blue" ? (isHaxball ? 0xfffdf9 : 0x2456e6) : (isHaxball ? 0xff8d4f : 0xd7263d));
+            const fill = p.team === "blue" ? (isHaxball ? 0xfffdf9 : 0x2456e6) : (isHaxball ? 0xff8d4f : 0xd7263d);
             g.fillStyle(fill, 1);
             g.fillCircle(px, py, r);
             if (p.flash > 0) {

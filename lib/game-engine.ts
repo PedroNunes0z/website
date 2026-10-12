@@ -88,22 +88,6 @@ export function pickTeamFlags(): Record<GameTeam, string> {
   return { blue: TEAM_FLAG_POOL[a], orange: TEAM_FLAG_POOL[b] };
 }
 
-// Fundo do jogador na cor forte da bandeira (nada de tom pastel).
-const FLAG_BG: Record<string, string> = {
-  br: "#009c3b", de: "#ffce00", fr: "#0055a4", ar: "#74acdf",
-  es: "#c60b1e", it: "#009246", pt: "#046a38", nl: "#ff5f00",
-  uy: "#0038a8", co: "#fcd116", mx: "#006847", us: "#3c3b6e",
-  jp: "#bc002d", kr: "#0047a0", sn: "#00853f", ma: "#c1272d",
-  hr: "#ff0000", be: "#fdda24", ch: "#da291c", se: "#006aa7",
-  gb: "#012169", ca: "#ff0000", no: "#ba0c2f", dk: "#c8102e",
-};
-
-/** Tom claro da bandeira para o fundo do jogador, ou nulo se desconhecida. */
-export function flagBackground(key: string | undefined): string | null {
-  if (!key) return null;
-  return FLAG_BG[key] ?? null;
-}
-
 const FIELD_WIDTH = 1000;
 const FIELD_HEIGHT = 560;
 const VIEW_HEIGHT = 760;
@@ -1317,22 +1301,18 @@ function labelSprite(text: string, font: string, fill: string): { img: HTMLCanva
 
 const flagImages = new Map<string, HTMLImageElement>();
 
-function drawFlag(ctx: CanvasRenderingContext2D, key: string | undefined, x: number, y: number, w: number) {
-  if (!key || typeof document === "undefined") return;
+function flagImage(key: string | undefined): HTMLImageElement | null {
+  if (!key || typeof document === "undefined") return null;
   let img = flagImages.get(key);
   if (!img) {
     img = new Image();
     img.src = `/games/flags/4x3/${key}.svg`;
     flagImages.set(key, img);
-    return;
+    return null;
   }
-  // drawImage com imagem incompleta lança: só desenha quando carregou.
-  if (!img.complete || img.naturalWidth === 0) return;
-  const h = (w * 3) / 4;
-  ctx.drawImage(img, x - w / 2, y - h / 2, w, h);
-  ctx.lineWidth = 1;
-  ctx.strokeStyle = "rgba(0,0,0,0.35)";
-  ctx.strokeRect(x - w / 2, y - h / 2, w, h);
+  // drawImage com imagem incompleta lança: só usa quando carregou.
+  if (!img.complete || img.naturalWidth === 0) return null;
+  return img;
 }
 
 export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, localPlayerId: string, opts: DrawOptions = {}) {
@@ -1365,14 +1345,25 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
   for (const player of state.players) {
     const radius = onIce ? 24 : 16;
     ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2);
-    ctx.fillStyle = flagBackground(state.flags?.[player.team]) ?? (player.team === "blue" ? homeFill : awayFill);
-    ctx.fill();
+    ctx.fillStyle = player.team === "blue" ? homeFill : awayFill; ctx.fill();
+    // Bandeira preenche todo o disco (cover, mesmo cortando as bordas).
+    const flag = flagImage(state.flags?.[player.team]);
+    if (flag) {
+      ctx.save();
+      ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2); ctx.clip();
+      const fit = Math.max((radius * 2) / flag.naturalWidth, (radius * 2) / flag.naturalHeight);
+      const dw = flag.naturalWidth * fit;
+      const dh = flag.naturalHeight * fit;
+      ctx.drawImage(flag, player.x - dw / 2, player.y - dh / 2, dw, dh);
+      ctx.restore();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
+      ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2); ctx.stroke();
+    }
     if (player.flash > 0) {
       ctx.fillStyle = `rgba(255,255,255,${Math.min(0.65, (player.flash / 0.18) * 0.65)})`;
       ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2); ctx.fill();
     }
-    // Emblema do time: bandeira em SVG sobre o uniforme, com filete escuro.
-    drawFlag(ctx, state.flags?.[player.team], player.x, player.y + 1, radius * 1.25);
     if (state.game === "haxball" && player.id === localPlayerId) {
       const barWidth = 42;
       ctx.fillStyle = "rgba(0,0,0,.8)";
