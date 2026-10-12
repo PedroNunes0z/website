@@ -165,10 +165,6 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     };
   }, []);
 
-  // Câmera dinâmica: segue o jogador com antecipação e zoom, sem mostrar o
-  // vazio fora do campo.
-  const camRef = useRef({ x: 0, y: 0 });
-
   // Encerra o replay e volta ao jogo com contagem (placar já aplicado).
   const finishReplay = useCallback(() => {
     if (phaseRef.current !== "replay") return;
@@ -217,7 +213,10 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     if (snapshot.game !== "haxball" || snapshot.freeze > 0 || snapshot.winner || phaseRef.current !== "play") return;
     const meId = mode === "bot" ? "local" : playerId;
     const me = snapshot.players.find((actor) => actor.id === meId && !actor.bot);
-    if (!me || me.cooldown > 0) return;
+    if (!me) return;
+    // Feedback imediato no aperto, acertando a bola ou não.
+    me.flash = 0.18;
+    if (me.cooldown > 0) return;
     const dx = snapshot.ball.x - me.x;
     const dy = snapshot.ball.y - me.y;
     if (dx * dx + dy * dy > 40 * 40) return;
@@ -399,29 +398,13 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
       const localId = mode === "bot" ? "local" : (playerId ?? "");
       const hideNames = quality === "low" || qualityRef.current.scale < 1;
 
-      // Câmera: enche a tela com o campo (mapa pequeno cresce) e persegue o
-      // jogador de leve, com o campo quase todo enquadrado e alinhado.
+      // Câmera fixa no centro do campo: sempre alinhada e enquadrada.
+      // O zoom enche a tela conforme o tamanho do mapa.
       const st = stateRef.current;
       const fw = st.field.w;
       const fh = st.field.h;
-      const fitZoom = Math.max(1, Math.min(1160 / fw, 760 / fh) * 0.85);
-      const zoom = fitZoom * 1.18;
-      const meCam = st.players.find((actor) => actor.id === localId) ?? null;
-      const look = 1 - Math.exp(-dt * 6);
-      camRef.current.x += ((meCam ? meCam.x + meCam.vx * 0.35 : 0) - camRef.current.x) * look;
-      camRef.current.y += ((meCam ? meCam.y + meCam.vy * 0.35 : 0) - camRef.current.y) * look;
-      const viewW = 1160 / zoom;
-      const viewH = 760 / zoom;
-      const margin = 40;
-      const loX = -fw / 2 - margin + viewW / 2;
-      const hiX = fw / 2 + margin - viewW / 2;
-      const loY = -fh / 2 - margin + viewH / 2;
-      const hiY = fh / 2 + margin - viewH / 2;
-      const cam = {
-        x: loX > hiX ? 0 : Math.max(loX, Math.min(hiX, camRef.current.x)),
-        y: loY > hiY ? 0 : Math.max(loY, Math.min(hiY, camRef.current.y)),
-        zoom,
-      };
+      const zoom = Math.max(1, Math.min(1160 / fw, 760 / fh) * 0.85);
+      const cam = { x: 0, y: 0, zoom };
       // Tremor do gol: impulso que decai em ~1s, sem mexer no replay.
       if (traumaRef.current > 0 && phaseRef.current !== "replay") {
         traumaRef.current = Math.max(0, traumaRef.current - dt * 1.4);
@@ -1108,7 +1091,7 @@ export function GameExperience({ game }: { game: GameId }) {
   const showSetup = !isFutBR || screen === "setup";
   const showMatch = !isFutBR || screen === "match";
   const exitMatch = () => {
-    gameAudio.play("ui");
+    gameAudio.ensure();
     if (mode === "online" && room) void leaveRoom();
     else setFutScreen("setup");
   };
@@ -1143,8 +1126,8 @@ export function GameExperience({ game }: { game: GameId }) {
           </label>
           <div className="futbr-menu-buttons">
             <button type="button" className="futbr-menu-primary" onClick={() => { gameAudio.play("ui"); setMode("bot"); setError(""); setFutScreen("setup"); }}>Jogar contra bots <ArrowRight size={16} /></button>
-            <button type="button" onClick={() => { gameAudio.play("ui"); setMode("online"); setError(""); setFutScreen("setup"); }}>Jogar online <ArrowRight size={16} /></button>
-            <button type="button" onClick={() => { gameAudio.play("ui"); setFutScreen("settings"); }}>Configurações</button>
+            <button type="button" onClick={() => { gameAudio.ensure(); setMode("online"); setError(""); setFutScreen("setup"); }}>Jogar online <ArrowRight size={16} /></button>
+            <button type="button" onClick={() => { gameAudio.ensure(); setFutScreen("settings"); }}>Configurações</button>
           </div>
         </div>
       )}
@@ -1170,8 +1153,8 @@ export function GameExperience({ game }: { game: GameId }) {
             <label>Seu nome nas salas
               <input value={name} maxLength={20} onChange={(event) => { setName(event.target.value); try { sessionStorage.setItem("pedro-games-name", event.target.value); } catch { /* sem storage */ } }} placeholder="Seu nome" />
             </label>
-            <button type="button" onClick={() => { gameAudio.play("ui"); gameAudio.testNarrations(); }}>Ouvir narrações (1 e 2)</button>
-            <button type="button" onClick={() => { gameAudio.play("ui"); setFutScreen("menu"); }}><ArrowLeft size={15} /> Voltar ao menu</button>
+            <button type="button" onClick={() => { gameAudio.ensure(); gameAudio.testNarrations(); }}>Ouvir narrações (1 e 2)</button>
+            <button type="button" onClick={() => { gameAudio.ensure(); setFutScreen("menu"); }}><ArrowLeft size={15} /> Voltar ao menu</button>
           </div>
         </div>
       )}
@@ -1310,7 +1293,7 @@ export function GameExperience({ game }: { game: GameId }) {
         </div>
       )}
       {isFutBR && mode === "bot" && (
-        <div className="futbr-start-row"><button type="button" className="game-primary-button" onClick={() => { gameAudio.play("ui"); setFutScreen("match"); }}>Entrar em campo <ArrowRight size={16} /></button></div>
+        <div className="futbr-start-row"><button type="button" className="game-primary-button" onClick={() => { gameAudio.ensure(); setFutScreen("match"); }}>Entrar em campo <ArrowRight size={16} /></button></div>
       )}
         </>
       )}

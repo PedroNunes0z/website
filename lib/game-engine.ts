@@ -1266,15 +1266,17 @@ function paintHockeyStatic(ctx: CanvasRenderingContext2D, fw: number, fh: number
   }
 }
 
-// Camada estática do campo: pintada uma vez por (jogo, tamanho e resolução)
-// e copiada com um único drawImage por frame. Isso tira o render de centenas
-// de operações vetoriais por frame para cerca de 40, o ganho que devolve o
-// FPS aos 60+.
+// Camada estática do campo: pintada uma vez por (jogo, tamanho) em resolução
+// fixa 2x do mundo (1160x760) e copiada com um único drawImage por frame. O
+// mundo tem escala uniforme no blit, então o estático casa exatamente com os
+// objetos dinâmicos em qualquer proporção de tela, sem esticar nem
+// desalinhar. O fundo do canvas cobre as faixas laterais (letterbox).
 const fieldLayers = new Map<string, HTMLCanvasElement>();
+const LAYER_SS = 2;
 
-function fieldLayer(game: GameId, fw: number, fh: number, w: number, h: number): HTMLCanvasElement | null {
+function fieldLayer(game: GameId, fw: number, fh: number): HTMLCanvasElement | null {
   if (typeof document === "undefined") return null;
-  const key = `${game}-${fw}x${fh}-${w}x${h}`;
+  const key = `${game}-${fw}x${fh}`;
   const cached = fieldLayers.get(key);
   if (cached) return cached;
   if (fieldLayers.size >= 6) {
@@ -1282,12 +1284,15 @@ function fieldLayer(game: GameId, fw: number, fh: number, w: number, h: number):
     if (!oldest.done) fieldLayers.delete(oldest.value);
   }
   const layer = document.createElement("canvas");
-  layer.width = Math.max(1, Math.round(w));
-  layer.height = Math.max(1, Math.round(h));
+  layer.width = 1160 * LAYER_SS;
+  layer.height = VIEW_HEIGHT * LAYER_SS;
   const g = layer.getContext("2d");
   if (!g) return null;
-  g.translate(layer.width / 2, layer.height / 2);
-  g.scale(layer.width / 1160, layer.height / VIEW_HEIGHT);
+  g.scale(LAYER_SS, LAYER_SS);
+  g.translate(1160 / 2, VIEW_HEIGHT / 2);
+  // Fundo integral do mundo: sela as bordas fora do entorno do campo.
+  g.fillStyle = game === "haxball" ? "#0d1a0f" : "#101418";
+  g.fillRect(-580, -VIEW_HEIGHT / 2, 1160, VIEW_HEIGHT);
   if (game === "haxball") paintHaxballStatic(g, fw, fh);
   else paintHockeyStatic(g, fw, fh);
   fieldLayers.set(key, layer);
@@ -1362,19 +1367,19 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
   const camX = cam?.x ?? 0;
   const camY = cam?.y ?? 0;
   const scale = Math.min(width / 1160, height / VIEW_HEIGHT) * zoom;
-  const layer = fieldLayer(state.game, state.field.w, state.field.h, width, height);
+  // Fundo integral primeiro (cobre as faixas do letterbox); depois o mundo
+  // com escala uniforme, com o centro do campo no meio da tela.
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = state.game === "haxball" ? "#0d1a0f" : "#101418";
+  ctx.fillRect(0, 0, width, height);
+  const layer = fieldLayer(state.game, state.field.w, state.field.h);
   // Transformação direta em vez de save/translate/scale: exata e sem pilha.
   // Com câmera, o centro seguido cai no meio da tela em qualquer zoom.
   ctx.setTransform(scale, 0, 0, scale, width / 2 - camX * scale, height / 2 - camY * scale);
   if (layer) {
-    // O blit cobre o canvas inteiro 1:1: sem clearRect/fillRect por cima.
+    // O blit em coordenadas de mundo casa 1:1 com os objetos dinâmicos.
     ctx.drawImage(layer, -580, -380, 1160, 760);
   } else {
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = state.game === "haxball" ? "#0d1a0f" : "#101418";
-    ctx.fillRect(0, 0, width, height);
-    ctx.setTransform(scale, 0, 0, scale, width / 2 - camX * scale, height / 2 - camY * scale);
     if (state.game === "haxball") paintHaxballStatic(ctx, state.field.w, state.field.h);
     else paintHockeyStatic(ctx, state.field.w, state.field.h);
   }

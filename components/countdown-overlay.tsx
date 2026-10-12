@@ -37,12 +37,15 @@ export function useCountdown() {
     for (const [value, at, final] of steps) {
       timers.current.push(window.setTimeout(() => {
         setCount(value);
-        gameAudio.countdownTick(final);
         if (final) {
+          // Apito de início no JÁ! (amostra real, com fallback procedural).
+          gameAudio.play("whistleStart", 1);
           timers.current.push(window.setTimeout(() => {
             setCount(null);
             frozenRef.current = false;
           }, 750));
+        } else {
+          gameAudio.countdownTick(false);
         }
       }, at));
     }

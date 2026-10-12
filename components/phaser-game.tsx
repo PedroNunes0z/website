@@ -12,7 +12,7 @@ import {
   type GameInput,
   type GameSnapshot,
 } from "@/lib/game-engine";
-import type { GameId } from "@/lib/games";
+import type { GameId, GameTeam } from "@/lib/games";
 
 /**
  * Motor Phaser dos jogos (bot mode).
@@ -28,8 +28,6 @@ import type { GameId } from "@/lib/games";
 
 const WORLD_W = 1160;
 const WORLD_H = 760;
-const FIELD_W = 1000;
-const FIELD_H = 560;
 
 function stripeColor(i: number): number {
   return i % 2 === 0 ? 0x2f9e44 : 0x2a9140;
@@ -75,7 +73,10 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
       const triggerKick = () => {
         if (!isHaxball || state.freeze > 0 || state.winner) return;
         const me = state.players.find((p) => p.id === "local" && !p.bot);
-        if (!me || me.cooldown > 0) return;
+        if (!me) return;
+        // Feedback imediato no aperto, acertando a bola ou não.
+        me.flash = 0.18;
+        if (me.cooldown > 0) return;
         const dx = state.ball.x - me.x;
         const dy = state.ball.y - me.y;
         if (dx * dx + dy * dy > 40 * 40) return;
@@ -88,7 +89,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
       };
       let prevDash = false;
       let pausedGame = false;
-      const camPos = { x: WORLD_W / 2, y: WORLD_H / 2 };
+      let prevWinner: GameTeam | null = null;
 
       class ArenaScene extends Phaser.Scene {
         private gfx!: Phaser.GameObjects.Graphics;
@@ -173,39 +174,31 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             const dashing = isHaxball && !!me && me.dashRemaining > 0;
             if (dashing && !prevDash) gameAudio.play("dash", 0.8, game);
             prevDash = dashing;
+            if (state.winner && state.winner !== prevWinner) {
+              prevWinner = state.winner;
+              gameAudio.play("whistleEnd", 1);
+            }
           }
-          // Câmera dinâmica: segue o jogador com zoom, sem mostrar o vazio.
+          // Câmera fixa no centro do campo: sempre alinhada e enquadrada.
           const fw = state.field.w;
           const fh = state.field.h;
-          const fitZoom = Math.max(1, Math.min(1160 / fw, 760 / fh) * 0.85);
-          const zoom = fitZoom * 1.18;
+          const zoom = Math.max(1, Math.min(1160 / fw, 760 / fh) * 0.85);
           const cam = this.cameras.main;
           cam.setZoom(zoom);
-          const hero = state.players.find((p) => p.id === "local");
-          const look = 1 - Math.exp(-dt * 6);
-          camPos.x += (((hero ? hero.x + hero.vx * 0.35 : 0) + WORLD_W / 2) - camPos.x) * look;
-          camPos.y += (((hero ? hero.y + hero.vy * 0.35 : 0) + WORLD_H / 2) - camPos.y) * look;
-          const viewW = WORLD_W / zoom;
-          const viewH = WORLD_H / zoom;
-          const margin = 40;
-          const loX = WORLD_W / 2 - fw / 2 - margin + viewW / 2;
-          const hiX = WORLD_W / 2 + fw / 2 + margin - viewW / 2;
-          const loY = WORLD_H / 2 - fh / 2 - margin + viewH / 2;
-          const hiY = WORLD_H / 2 + fh / 2 + margin - viewH / 2;
-          cam.centerOn(
-            loX > hiX ? WORLD_W / 2 : Math.max(loX, Math.min(hiX, camPos.x)),
-            loY > hiY ? WORLD_H / 2 : Math.max(loY, Math.min(hiY, camPos.y)),
-          );
+          cam.centerOn(WORLD_W / 2, WORLD_H / 2);
           this.draw(state);
         }
 
         private draw(s: GameSnapshot) {
           const g = this.gfx;
           g.clear();
-          const ox = WORLD_W / 2 - FIELD_W / 2;
-          const oy = WORLD_H / 2 - FIELD_H / 2;
+          // Campo dinâmico por roster: centralizado no mundo, como na física.
+          const fw = s.field.w;
+          const fh = s.field.h;
+          const ox = WORLD_W / 2 - fw / 2;
+          const oy = WORLD_H / 2 - fh / 2;
           if (s.game === "haxball") this.drawPitch(g, ox, oy, s);
-          else this.drawRink(g, ox, oy);
+          else this.drawRink(g, ox, oy, s);
           // Jogadores sem borda: círculo do time e estrela, sem anel.
           // Azul contra vermelho no gelo, bandeira do time no peito.
           for (let i = 0; i < s.players.length; i++) {
@@ -240,37 +233,39 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
         }
 
         private drawPitch(g: Phaser.GameObjects.Graphics, ox: number, oy: number, s: GameSnapshot) {
+          const fw = s.field.w;
+          const fh = s.field.h;
           g.fillStyle(0x0d1a0f, 1);
           g.fillRect(0, 0, WORLD_W, WORLD_H);
           const stripes = 10;
-          const sw = FIELD_W / stripes;
+          const sw = fw / stripes;
           for (let i = 0; i < stripes; i++) {
             g.fillStyle(stripeColor(i), 1);
-            g.fillRect(ox + i * sw, oy, sw + 1, FIELD_H);
+            g.fillRect(ox + i * sw, oy, sw + 1, fh);
           }
           g.lineStyle(4, 0xffffff, 0.95);
-          g.strokeRect(ox, oy, FIELD_W, FIELD_H);
-          g.lineBetween(ox + FIELD_W / 2, oy, ox + FIELD_W / 2, oy + FIELD_H);
-          g.strokeCircle(ox + FIELD_W / 2, oy + FIELD_H / 2, 75);
+          g.strokeRect(ox, oy, fw, fh);
+          g.lineBetween(ox + fw / 2, oy, ox + fw / 2, oy + fh);
+          g.strokeCircle(ox + fw / 2, oy + fh / 2, 75);
           g.fillStyle(0xffffff, 0.95);
-          g.fillCircle(ox + FIELD_W / 2, oy + FIELD_H / 2, 5);
+          g.fillCircle(ox + fw / 2, oy + fh / 2, 5);
           for (const side of [-1, 1]) {
-            const gx = side < 0 ? ox : ox + FIELD_W - 140;
-            const sx = side < 0 ? ox : ox + FIELD_W - 55;
+            const gx = side < 0 ? ox : ox + fw - 140;
+            const sx = side < 0 ? ox : ox + fw - 55;
             g.lineStyle(3, 0xffffff, 0.95);
-            g.strokeRect(gx, oy + FIELD_H / 2 - 160, 140, 320);
-            g.strokeRect(sx, oy + FIELD_H / 2 - 95, 55, 190);
+            g.strokeRect(gx, oy + fh / 2 - 160, 140, 320);
+            g.strokeRect(sx, oy + fh / 2 - 95, 55, 190);
             g.fillStyle(0xffffff, 0.95);
-            g.fillCircle(ox + FIELD_W / 2 + side * (FIELD_W / 2 - 105), oy + FIELD_H / 2, 4.5);
+            g.fillCircle(ox + fw / 2 + side * (fw / 2 - 105), oy + fh / 2, 4.5);
           }
           // Redes com malha + barriga conforme a bola afunda no pano.
           const goalHalf = 85;
           const depth = 70;
           for (const side of [-1, 1] as const) {
-            const inNet = Math.sign(s.ball.x) === side && Math.abs(s.ball.x) > FIELD_W / 2;
-            const bulge = inNet ? Math.min(1, (Math.abs(s.ball.x) - FIELD_W / 2) / depth) * 14 : 0;
-            const nx = side < 0 ? ox - depth - bulge : ox + FIELD_W;
-            const ny = oy + FIELD_H / 2 - goalHalf;
+            const inNet = Math.sign(s.ball.x) === side && Math.abs(s.ball.x) > fw / 2;
+            const bulge = inNet ? Math.min(1, (Math.abs(s.ball.x) - fw / 2) / depth) * 14 : 0;
+            const nx = side < 0 ? ox - depth - bulge : ox + fw;
+            const ny = oy + fh / 2 - goalHalf;
             g.fillStyle(0xffffff, 0.1);
             g.fillRect(nx, ny, depth + bulge, goalHalf * 2);
             g.lineStyle(1, 0xffffff, 0.38);
@@ -281,28 +276,30 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           }
         }
 
-        private drawRink(g: Phaser.GameObjects.Graphics, ox: number, oy: number) {
+        private drawRink(g: Phaser.GameObjects.Graphics, ox: number, oy: number, s: GameSnapshot) {
+          const fw = s.field.w;
+          const fh = s.field.h;
           g.fillStyle(0x101418, 1);
           g.fillRect(0, 0, WORLD_W, WORLD_H);
           g.fillStyle(0xedf0f2, 1);
-          g.fillRect(ox, oy, FIELD_W, FIELD_H);
+          g.fillRect(ox, oy, fw, fh);
           g.lineStyle(10, 0x111111, 1);
-          g.strokeRect(ox, oy, FIELD_W, FIELD_H);
+          g.strokeRect(ox, oy, fw, fh);
           g.lineStyle(5, 0xe8b921, 1);
-          g.strokeRect(ox + 8, oy + 8, FIELD_W - 16, FIELD_H - 16);
+          g.strokeRect(ox + 8, oy + 8, fw - 16, fh - 16);
           g.fillStyle(0xc8102e, 1);
-          g.fillRect(ox + FIELD_W / 2 - 6, oy, 12, FIELD_H);
+          g.fillRect(ox + fw / 2 - 6, oy, 12, fh);
           g.lineStyle(5, 0x0b3d91, 1);
-          g.strokeCircle(ox + FIELD_W / 2, oy + FIELD_H / 2, 70);
+          g.strokeCircle(ox + fw / 2, oy + fh / 2, 70);
           g.fillStyle(0x0b3d91, 1);
-          g.fillCircle(ox + FIELD_W / 2, oy + FIELD_H / 2, 7);
+          g.fillCircle(ox + fw / 2, oy + fh / 2, 7);
           g.fillStyle(0x0b3d91, 1);
-          for (const dx of [-160, 160]) g.fillRect(ox + FIELD_W / 2 + dx - 8, oy, 16, FIELD_H);
+          for (const dx of [-160, 160]) g.fillRect(ox + fw / 2 + dx - 8, oy, 16, fh);
           g.fillStyle(0xc8102e, 1);
-          for (const dx of [-445, 445]) g.fillRect(ox + FIELD_W / 2 + dx - 2, oy, 4, FIELD_H);
+          for (const dx of [-445, 445]) g.fillRect(ox + fw / 2 + dx - 2, oy, 4, fh);
           for (const [fx, fy] of [[-300, -160], [-300, 160], [300, -160], [300, 160]]) {
-            const cx = ox + FIELD_W / 2 + fx;
-            const cy = oy + FIELD_H / 2 + fy;
+            const cx = ox + fw / 2 + fx;
+            const cy = oy + fh / 2 + fy;
             g.lineStyle(4, 0xc8102e, 1);
             g.strokeCircle(cx, cy, 56);
             g.fillStyle(0xc8102e, 1);
@@ -311,10 +308,10 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           // Redes dentro do rinque, sobre a linha do gol.
           const goalHalf = 62;
           const depth = 42;
-          const cx = ox + FIELD_W / 2;
+          const cx = ox + fw / 2;
           for (const side of [-1, 1] as const) {
             const nx = side < 0 ? cx - 445 - depth : cx + 445;
-            const ny = oy + FIELD_H / 2 - goalHalf;
+            const ny = oy + fh / 2 - goalHalf;
             g.fillStyle(0xffffff, 0.75);
             g.fillRect(nx, ny, depth, goalHalf * 2);
             g.lineStyle(1, 0x78828c, 0.5);

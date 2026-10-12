@@ -424,7 +424,9 @@ class GameAudio {
         break;
       case "whistleStart":
         if (!this.playSample("whistleStart", jitter(1, 0.02), 0.8 * power)) {
-          this.noiseHit(0.3, 2500, 0.4 * power);
+          if (!this.playSample("whistleStartAlt", jitter(1, 0.02), 0.8 * power)) {
+            this.noiseHit(0.3, 2500, 0.4 * power);
+          }
         }
         break;
       case "whistleEnd":
