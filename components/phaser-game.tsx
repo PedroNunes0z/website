@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { gameAudio } from "@/lib/game-audio";
 import {
   createBotGame,
   FULL_FIELD,
@@ -38,6 +39,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
   const orangeCount = bots.orange;
 
   useEffect(() => {
+    gameAudio.preload();
     let destroyed = false;
     let phaserGame: { destroy: (removeCanvas: boolean) => void } | null = null;
 
@@ -66,7 +68,9 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
         input.power = 0.62;
         input.kickSpin = false;
         input.kickSeq += 1;
+        gameAudio.play("kick", 0.7, game);
       };
+      let prevDash = false;
 
       class ArenaScene extends Phaser.Scene {
         private gfx!: Phaser.GameObjects.Graphics;
@@ -86,12 +90,14 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
           });
           this.input.on("pointerdown", (p: Phaser.Input.Pointer) => {
             if (!isHaxball || !p.leftButtonDown()) return;
+            gameAudio.ensure();
             triggerKick();
           });
           kb?.on("keydown-Q", () => {
             input.dashSeq += 1;
           });
           kb?.on("keydown-SPACE", () => {
+            gameAudio.ensure();
             triggerKick();
           });
         }
@@ -112,6 +118,10 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             input.sprint = !!k.SHIFT?.isDown;
           }
           stepGame(state, { local: input }, lastKicks, dt);
+          const me = state.players.find((p) => p.id === "local");
+          const dashing = isHaxball && !!me && me.dashRemaining > 0;
+          if (dashing && !prevDash) gameAudio.play("dash", 0.8, game);
+          prevDash = dashing;
           this.draw(state);
         }
 

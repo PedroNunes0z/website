@@ -68,6 +68,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   const replayTRef = useRef(0);
   const prevBallRef = useRef({ x: 0, y: 0, vx: 0, vy: 0 });
   const postSfxAtRef = useRef(0);
+  const prevDashRef = useRef(false);
   const droppedRef = useRef(0);
   // Degradação automática de qualidade quando o render não acompanha.
   const qualityRef = useRef({ scale: 1, slow: 0, fast: 0 });
@@ -174,6 +175,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
   }, [game, triggerKick]);
 
   useEffect(() => {
+    // Busca e decodifica os sons cedo (sem precisar de gesto); o contexto
+    // abre no primeiro clique ou tecla.
+    gameAudio.preload();
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d", { alpha: false, desynchronized: true });
     if (!canvas || !ctx) return;
@@ -357,32 +361,39 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, onRoomUpdate
         drawGame(ctx, stateRef.current, localId, { hideNames });
       }
 
-      // Áudio: chute (salto de velocidade), parede (inversão) e trave.
+      // Áudio: chute e disco (salto de velocidade), parede e tabelas
+      // (inversão com o timbre do material), trave e dash próprio.
       {
-        const ball = stateRef.current.ball;
+        const sim = stateRef.current;
+        const ball = sim.ball;
         const prev = prevBallRef.current;
         const prevSpeed = Math.sqrt(prev.vx * prev.vx + prev.vy * prev.vy);
         const curSpeed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
         if (curSpeed - prevSpeed > 250) {
-          gameAudio.play("kick", curSpeed / 700);
+          gameAudio.play("kick", curSpeed / 700, sim.game);
         } else if (curSpeed > 120 && ((prev.vx > 0) !== (ball.vx > 0) || (prev.vy > 0) !== (ball.vy > 0))) {
-          gameAudio.play("wall", curSpeed / 800);
+          gameAudio.play("wall", curSpeed / 800, sim.game);
         }
         if (curSpeed > 180 && now - postSfxAtRef.current > 400) {
-          const hw = stateRef.current.field.w / 2;
-          const mouth = goalMouth(stateRef.current.game, hw);
-          const postHalf = stateRef.current.game === "haxball" ? 85 : 62;
+          const hw = sim.field.w / 2;
+          const mouth = goalMouth(sim.game, hw);
+          const postHalf = sim.game === "haxball" ? 85 : 62;
           for (const px of [-mouth, mouth]) {
             for (const py of [-postHalf, postHalf]) {
               const pdx = ball.x - px;
               const pdy = ball.y - py;
               if (pdx * pdx + pdy * pdy < 30 * 30) {
                 postSfxAtRef.current = now;
-                gameAudio.play("post", 1);
+                gameAudio.play("post", 1, sim.game);
               }
             }
           }
         }
+        const meId = mode === "bot" ? "local" : playerId;
+        const me = sim.players.find((actor) => actor.id === meId);
+        const dashing = !!me && me.dashRemaining > 0;
+        if (dashing && !prevDashRef.current) gameAudio.play("dash", 0.8, sim.game);
+        prevDashRef.current = dashing;
         prevBallRef.current = { x: ball.x, y: ball.y, vx: ball.vx, vy: ball.vy };
       }
       renderMsAcc += performance.now() - tRender0;
