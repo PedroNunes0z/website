@@ -523,6 +523,12 @@ img { max-width: 100%; }
 .game-replay-badge { position: absolute; top: .9rem; left: 50%; z-index: 4; padding: .55rem 1rem; border: 1px solid var(--orange); background: rgba(5, 5, 5, .88); color: var(--white); font-family: var(--mono); font-size: .6rem; text-transform: uppercase; letter-spacing: .14em; cursor: pointer; transform: translateX(-50%); }
 .game-replay-badge strong { color: var(--orange); }
 .game-replay-badge:hover { background: #251810; }
+.game-countdown { position: absolute; inset: 0; z-index: 6; display: grid; place-items: center; pointer-events: none; }
+.game-countdown span { display: block; font-family: var(--display); font-size: clamp(4rem, 12vw, 8rem); line-height: 1; color: #fff; text-shadow: 0 0 60px rgba(255,141,79,.55); animation: game-count-pop .78s ease-out both; }
+.game-futbr .game-countdown span { color: var(--game-accent); text-shadow: 0 0 60px rgba(0,156,59,.65); }
+@keyframes game-count-pop { 0% { opacity: 0; transform: scale(.4); } 25% { opacity: 1; transform: scale(1.12); } 60% { opacity: 1; transform: scale(1); } 100% { opacity: 0; transform: scale(1.05); } }
+@media (prefers-reduced-motion: reduce) { .game-countdown span { animation: none; } }
+.phaser-shell { position: relative; }
 .touch-controls { display: none; }
 @media (pointer: coarse) {
   .touch-controls { position: absolute; inset: auto 0 0 0; z-index: 5; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 1rem calc(1rem + env(safe-area-inset-bottom, 0px)); pointer-events: none; }

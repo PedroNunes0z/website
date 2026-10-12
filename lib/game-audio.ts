@@ -336,6 +336,24 @@ class GameAudio {
     }
   }
 
+  /** Bipes da contagem regressiva: curto nos números, longo no JÁ!. */
+  countdownTick(final: boolean): void {
+    if (this.muted) return;
+    this.ensure();
+    if (!this.ctx || !this.master) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = final ? 880 : 660;
+    const duration = final ? 0.45 : 0.16;
+    const envelope = this.ctx.createGain();
+    envelope.gain.setValueAtTime(0.5, now);
+    envelope.gain.exponentialRampToValueAtTime(0.001, now + duration);
+    osc.connect(envelope).connect(this.master);
+    osc.start(now);
+    osc.stop(now + duration + 0.02);
+  }
+
   play(kind: SfxKind, intensity = 1, game: GameKind = "haxball"): void {
     if (this.muted) return;
     this.ensure();

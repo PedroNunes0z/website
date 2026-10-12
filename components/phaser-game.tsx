@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { gameAudio } from "@/lib/game-audio";
+import { CountdownOverlay, useCountdown } from "@/components/countdown-overlay";
 import {
   createBotGame,
   FULL_FIELD,
@@ -37,11 +38,13 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const blueCount = bots.blue;
   const orangeCount = bots.orange;
+  const { count: countValue, start: startCountdown, frozenRef: countdownFrozen } = useCountdown();
 
   useEffect(() => {
     gameAudio.preload();
     gameAudio.startMatch();
     gameAudio.stopMenu();
+    startCountdown();
     let destroyed = false;
     let phaserGame: { destroy: (removeCanvas: boolean) => void } | null = null;
 
@@ -128,11 +131,13 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
             input.y = Number(k.S.isDown || k.DOWN.isDown) - Number(k.W.isDown || k.UP.isDown);
             input.sprint = !!k.SHIFT?.isDown;
           }
-          stepGame(state, { local: input }, lastKicks, dt);
-          const me = state.players.find((p) => p.id === "local");
-          const dashing = isHaxball && !!me && me.dashRemaining > 0;
-          if (dashing && !prevDash) gameAudio.play("dash", 0.8, game);
-          prevDash = dashing;
+          if (!countdownFrozen.current) {
+            stepGame(state, { local: input }, lastKicks, dt);
+            const me = state.players.find((p) => p.id === "local");
+            const dashing = isHaxball && !!me && me.dashRemaining > 0;
+            if (dashing && !prevDash) gameAudio.play("dash", 0.8, game);
+            prevDash = dashing;
+          }
           this.draw(state);
         }
 
@@ -289,7 +294,7 @@ export function PhaserGame({ game, bots }: { game: GameId; bots: BotCounts }) {
       phaserGame?.destroy(true);
       phaserGame = null;
     };
-  }, [game, blueCount, orangeCount]);
+  }, [game, blueCount, orangeCount, startCountdown, countdownFrozen]);
 
-  return <div ref={hostRef} className="phaser-shell" aria-label={`Campo ${game} no motor Phaser`} />;
+  return <div ref={hostRef} className="phaser-shell" aria-label={`Campo ${game} no motor Phaser`}><CountdownOverlay value={countValue} /></div>;
 }

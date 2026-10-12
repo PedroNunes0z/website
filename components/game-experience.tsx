@@ -10,6 +10,7 @@ import { gameAudio } from "@/lib/game-audio";
 import { usePhaserEngine } from "@/lib/game-server";
 import { GeckosRoomTransport, LAN_URL_KEY } from "@/lib/geckos-room";
 import { TouchControls, type TouchState } from "@/components/touch-controls";
+import { CountdownOverlay, useCountdown } from "@/components/countdown-overlay";
 
 const PhaserGame = dynamic(() => import("@/components/phaser-game").then((module) => module.PhaserGame), { ssr: false });
 
@@ -93,16 +94,15 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   const roomId = room?.id ?? null;
   const roomStatus = room?.status;
   const isHost = mode === "online" && room?.ownerId === playerId && !!ownerToken;
+  const { count: countValue, start: startCountdown, cancel: cancelCountdown, frozenRef: countdownFrozen } = useCountdown();
 
-  const prevStatusRef = useRef(roomStatus);
   const prevWinnerRef = useRef<GameTeam | null>(null);
   useEffect(() => {
-    // Apito de início quando a sala sai do lobby e apito final no vencedor.
-    if (mode === "online" && prevStatusRef.current !== "playing" && roomStatus === "playing") {
-      gameAudio.play("whistleStart", 1);
+    // Dono iniciou: contagem para todo mundo que está no campo.
+    if (mode === "online" && roomStatus === "playing" && room?.ownerId === playerId && !!ownerToken) {
+      startCountdown();
     }
-    prevStatusRef.current = roomStatus;
-  }, [roomStatus, mode]);
+  }, [roomStatus, mode, room, playerId, ownerToken, startCountdown]);
   useEffect(() => {
     if (hud.winner && prevWinnerRef.current !== hud.winner) gameAudio.play("whistleEnd", 1);
     prevWinnerRef.current = hud.winner;
@@ -128,8 +128,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     replayRef.current = null;
     matchPointRef.current = false;
     gameAudio.stopStomps();
-    if (mode === "bot") gameAudio.play("whistleStart", 1);
-  }, [game, mode, bots, roomId, roomStatus]);
+    if (mode === "bot") startCountdown();
+  }, [game, mode, bots, roomId, roomStatus, startCountdown]);
 
   useEffect(() => {
     const onFullscreenChange = () => setIsFullscreen(document.fullscreenElement === boardRef.current);
@@ -329,7 +329,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
       acc = Math.min(acc + dt, 0.25);
       let steps = 0;
       const tSim0 = performance.now();
-      while (acc >= STEP && steps < 4) {
+      if (!countdownFrozen.current) {
+        while (acc >= STEP && steps < 4) {
         if (mode === "bot") {
           stepGame(stateRef.current, deadBall ? {} : { local: inputRef.current }, lastKicksRef.current, STEP, stepOptions);
         } else if (mode === "online" && playerId && currentRoom?.status === "playing") {
@@ -346,13 +347,16 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         }
         acc -= STEP;
         steps += 1;
-      }
-      if (steps === 4) {
+        }
+        if (steps === 4) {
+          acc = 0;
+          droppedRef.current += 1;
+        }
+        simMsAcc += performance.now() - tSim0;
+        simSteps += steps;
+      } else {
         acc = 0;
-        droppedRef.current += 1;
       }
-      simMsAcc += performance.now() - tSim0;
-      simSteps += steps;
 
       const localId = mode === "bot" ? "local" : (playerId ?? "");
       const hideNames = quality === "low" || qualityRef.current.scale < 1;
@@ -360,7 +364,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
 
       // Anel do replay: guarda os últimos ~12s com carimbo de tempo da sim.
       // O carimbo garante 1x na reprodução em qualquer taxa de quadros.
-      if (phaseRef.current === "play") {
+      // Congelado na contagem: nada para gravar.
+      if (phaseRef.current === "play" && !countdownFrozen.current) {
         const snapshot = stateRef.current;
         bufferRef.current.push({
           t: snapshot.elapsed,
@@ -483,7 +488,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
 
     frame = requestAnimationFrame(run);
     return () => { cancelAnimationFrame(frame); observer.disconnect(); gameAudio.stopMatch(); gameAudio.stopStomps(); };
-  }, [game, mode, playerId, ownerToken, quality, finishReplay]);
+  }, [game, mode, playerId, ownerToken, quality, finishReplay, countdownFrozen]);
 
   const acceptTarget = useCallback((snapshot: GameSnapshot, hard = false) => {
     const current = targetRef.current;
@@ -500,6 +505,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     // frame: adotá-lo inteiro faria o convidado voltar no tempo a cada evento
     // publicado pelo host (lag sentido por quem não criou a sala).
     if (hard || restarted || !hasAuthoritativeRef.current) {
+      const firstEver = !hasAuthoritativeRef.current;
       stateRef.current = {
         ...snapshot,
         players: snapshot.players.map((actor) => ({ ...actor })),
@@ -507,9 +513,15 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
         score: { ...snapshot.score },
       };
       hasAuthoritativeRef.current = true;
+      // Convidado junto do apito inicial conta junto; entrando no meio de
+      // partida em andamento, cancela a contagem e segue o jogo.
+      if (firstEver) {
+        if (snapshot.elapsed > 5) cancelCountdown();
+        else startCountdown();
+      }
       console.info(`[Net] Estado autoritativo adotado (rev=${snapshot.revision}, relógio=${snapshot.elapsed.toFixed(2)}s${hard ? ", adoção dura" : ""}).`);
     }
-  }, []);
+  }, [cancelCountdown, startCountdown]);
 
   const resync = useCallback(async (hard = false): Promise<boolean> => {
     if (mode !== "online" || !roomId || !playerId) return false;
@@ -764,6 +776,7 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
           <span className="game-net-hud-mode"><i aria-hidden="true" />draw {metrics.draw}ms</span>
         </div>
         {replayBadge && <button type="button" className="game-replay-badge" onClick={() => finishReplay()}><strong>Replay</strong> · clique para pular</button>}
+        <CountdownOverlay value={countValue} />
 
         <canvas ref={canvasRef} tabIndex={0} className="game-canvas" aria-label={`${labels[game]}: use WASD para mover${game === "haxball" ? ", clique ou Espaço para chutar" : ""}`} onPointerDown={onPointerDown} onContextMenu={(event) => event.preventDefault()} />
         <TouchControls game={game} touchRef={touchRef} keysRef={keysRef} onKick={() => triggerKick()} onDash={() => { inputRef.current.dashSeq += 1; }} />
@@ -976,6 +989,7 @@ export function GameExperience({ game }: { game: GameId }) {
   }, [gamePath]);
 
   const max = game === "haxball" ? 5 : 1;
+  const numero = game === "haxball" ? "01" : "02";
   // FutBR online: partida montada (dono iniciou ou convidado sincronizou)
   // leva do pré-jogo ao campo sem estado extra.
   const screen = isFutBR && futScreen === "setup" && mode === "online" && room?.status === "playing" ? "match" : futScreen;
@@ -988,19 +1002,23 @@ export function GameExperience({ game }: { game: GameId }) {
   };
   return (
     <main className={isFutBR ? "game-experience game-futbr shell" : "game-experience shell"}>
-      <div className="game-crumb">
-        <Link href="/games"><ArrowLeft size={15} /> Todos os jogos</Link>
-        <span>/</span>
-        <span>{labels[game]}</span>
-      </div>
+      {!isFutBR && (
+        <>
+          <div className="game-crumb">
+            <Link href="/games"><ArrowLeft size={15} /> Todos os jogos</Link>
+            <span>/</span>
+            <span>{labels[game]}</span>
+          </div>
 
-      <div className="game-page-heading">
-        <div>
-          <p className="eyebrow">Playground / {game === "haxball" ? "01" : "02"}</p>
-          <h1>{labels[game]}<span>.</span>{isFutBR && <em className="futbr-flag" aria-label="Brasil">🇧🇷</em>}</h1>
-          <p>{descriptions[game]}</p>
-        </div>
-      </div>
+          <div className="game-page-heading">
+            <div>
+              <p className="eyebrow">Playground / {numero}</p>
+              <h1>{labels[game]}<span>.</span>{isFutBR && <em className="futbr-flag" aria-label="Brasil">🇧🇷</em>}</h1>
+              <p>{descriptions[game]}</p>
+            </div>
+          </div>
+        </>
+      )}
 
       {isFutBR && futScreen === "menu" && (
         <div className="futbr-menu">
