@@ -5,7 +5,7 @@ import ts from "typescript";
 
 const source = await readFile(new URL("../lib/game-engine.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } });
-const { createOnlineGame, createBotGame, botShotPower, resolveKickDirection, stepGame, applyGoal, reconcileAuthoritativeState, FULL_FIELD } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
+const { createOnlineGame, createBotGame, botShotPower, resolveKickDirection, stepGame, applyGoal, reconcileAuthoritativeState, resetPositions, FULL_FIELD } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 
 const roster = [
   { id: "white", name: "Branco", team: "blue", joinedAt: 0, lastSeen: 0 },
@@ -282,6 +282,29 @@ test("goleiro bot segura a linha do gol em vez de passear", () => {
   for (let frame = 0; frame < 180; frame++) stepGame(state, {}, {}, 1 / 60);
   assert.ok(goalie.x > 400, `goleiro em ${goalie.x}`);
   assert.ok(Math.abs(goalie.x - 466) < 120, `goleiro longe da linha: ${goalie.x}`);
+});
+
+test("reset volta todo mundo à formação antes da contagem", () => {
+  const state = createBotGame("haxball", { blue: 1, orange: 1 });
+  const kicks = {};
+  for (let frame = 0; frame < 120; frame++) stepGame(state, {}, kicks, 1 / 60);
+  for (const player of state.players) {
+    player.x += 123;
+    player.y -= 77;
+    player.vx = 200;
+    player.stamina = 10;
+  }
+  state.ball.x = 300;
+  state.ball.vx = 400;
+  resetPositions(state);
+  assert.equal(state.ball.x, 0);
+  assert.equal(state.ball.vx, 0);
+  for (const player of state.players) {
+    assert.equal(player.vx, 0);
+    assert.equal(player.vy, 0);
+    assert.equal(player.stamina, 100);
+    assert.ok(Math.abs(player.x) > 50, `jogador fora da formação em x=${player.x}`);
+  }
 });
 
 test("bola que sai de volta antes da espera não vale gol", () => {

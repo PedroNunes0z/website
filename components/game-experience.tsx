@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { applyGoal, createBotGame, createOnlineGame, drawGame, goalMouth, pickTeamFlags, reconcileAuthoritativeState, stepGame, updateOnlineRoster, type BotCounts, type GameActor, type GameInput, type GameObject, type GameSnapshot } from "@/lib/game-engine";
+import { applyGoal, createBotGame, createOnlineGame, drawGame, goalMouth, pickTeamFlags, reconcileAuthoritativeState, resetPositions, stepGame, updateOnlineRoster, type BotCounts, type GameActor, type GameInput, type GameObject, type GameSnapshot } from "@/lib/game-engine";
 import type { GameId, GameRoom, GameTeam } from "@/lib/games";
 import { gameAudio } from "@/lib/game-audio";
 import { usePhaserEngine } from "@/lib/game-server";
@@ -23,11 +23,11 @@ const descriptions = {
 
 const transportText = (udp: boolean, lan: boolean) => (!udp ? "HTTP (sondagem)" : lan ? "LAN ativa" : "UDP ativo");
 
-/** Nomes de exibição por jogo: azul contra vermelho no gelo. */
+/** Nomes de exibição por jogo: verde contra amarela no FutBR. */
 const teamName = (game: GameId, team: GameTeam) =>
-  game === "hoquei" ? (team === "blue" ? "azul" : "vermelha") : (team === "blue" ? "branca" : "laranja");
+  game === "hoquei" ? (team === "blue" ? "azul" : "vermelha") : (team === "blue" ? "verde" : "amarela");
 const teamNameCap = (game: GameId, team: GameTeam) =>
-  game === "hoquei" ? (team === "blue" ? "Azul" : "Vermelha") : (team === "blue" ? "Branca" : "Laranja");
+  game === "hoquei" ? (team === "blue" ? "Azul" : "Vermelha") : (team === "blue" ? "Verde" : "Amarela");
 
 type RoomResponse = { room: GameRoom; playerId?: string; ownerToken?: string; player?: { id: string; team: GameTeam } };
 
@@ -166,6 +166,9 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   }, []);
 
   // Encerra o replay e volta ao jogo com contagem (placar já aplicado).
+  // Todo mundo volta à formação ANTES da contagem: com a simulação
+  // congelada, o gelo pendente nunca expiraria e os jogadores só voltariam
+  // depois do JÁ.
   const finishReplay = useCallback(() => {
     if (phaseRef.current !== "replay") return;
     replayRef.current = null;
@@ -173,6 +176,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
     setReplayBadge(false);
     bufferRef.current = [];
     phaseRef.current = "play";
+    resetPositions(stateRef.current);
+    stateRef.current.freeze = 0;
     if (!stateRef.current.winner) startCountdown(600);
   }, [startCountdown]);
 
@@ -848,8 +853,8 @@ function GameCanvas({ game, mode, bots, room, playerId, ownerToken, quality, onR
   const fpsTone = metrics.fps > 55 ? "ok" : metrics.fps > 35 ? "mid" : "bad";
   const simTone = metrics.sim >= 55 ? "ok" : "bad";
   const lan = GeckosRoomTransport.isLan();
-  const homeDot = game === "hoquei" ? "blue" : "white";
-  const awayDot = game === "hoquei" ? "red" : "orange";
+  const homeDot = game === "hoquei" ? "blue" : "green";
+  const awayDot = game === "hoquei" ? "red" : "yellow";
   return (
     <div ref={boardRef} className="game-board-wrap">
       <div className="game-board-hud">

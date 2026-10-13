@@ -330,7 +330,8 @@ export function updateOnlineRoster(state: GameSnapshot, roster: GameRoomPlayer[]
   });
 }
 
-function resetPositions(state: GameSnapshot) {
+/** Volta todo mundo à formação de saída: bola no centro, times zerados. */
+export function resetPositions(state: GameSnapshot) {
   state.goalPending = null;
   const indexes: Record<GameTeam, number> = { blue: 0, orange: 0 };
   state.players.forEach((player) => {
@@ -1385,8 +1386,8 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
   }
 
   const onIce = state.game === "hoquei";
-  const homeFill = onIce ? "#2456e6" : "#fffdf9";
-  const awayFill = onIce ? "#d7263d" : "#ff8d4f";
+  const homeFill = onIce ? "#2456e6" : "#009c3b";
+  const awayFill = onIce ? "#d7263d" : "#ffd400";
   for (const player of state.players) {
     const radius = onIce ? 24 : 16;
     ctx.beginPath(); ctx.arc(player.x, player.y, radius, 0, Math.PI * 2);
@@ -1413,9 +1414,9 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameSnapshot, loc
       const barWidth = 42;
       ctx.fillStyle = "rgba(0,0,0,.8)";
       ctx.fillRect(player.x - barWidth / 2 - 2, player.y - radius - 31, barWidth + 4, 7);
-      ctx.fillStyle = "#514038";
+      ctx.fillStyle = "#07331b";
       ctx.fillRect(player.x - barWidth / 2, player.y - radius - 29, barWidth, 3);
-      ctx.fillStyle = player.stamina < 25 ? "#fffdf9" : "#ffd166";
+      ctx.fillStyle = player.stamina < 25 ? "#ffffff" : "#ffd400";
       ctx.fillRect(player.x - barWidth / 2, player.y - radius - 29, barWidth * clamp(player.stamina / 100, 0, 1), 3);
     }
     if (!opts.hideNames) {
